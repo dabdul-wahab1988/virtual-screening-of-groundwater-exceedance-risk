@@ -1,0 +1,41 @@
+project:
+  name: "groundwater_virtual_screening_pru"
+  version: "0.1.0"
+
+paths:
+  input_csv:           "data/raw/pru.csv"
+  manuscript_outline:  "manuscript/Outline.txt"
+  thresholds_yaml:     "configs/thresholds.yaml"
+  leakage_rules_yaml:  "configs/leakage_rules.yaml"
+  sqlite_db:           "outputs/groundwater_screening.db"
+  logs_dir:            "outputs/logs"
+  gis_exports_dir:     "outputs/gis_exports"
+
+cv:
+  outer_folds:                    5
+  spatial_outer_folds:            3
+  inner_folds:                    3
+  repeats:                        5
+  random_seed:                    20260531
+  minimum_positive_cases_for_ml:  5
+
+spatial:
+  latitude_column:          "Dy"
+  longitude_column:         "Dx"
+  clustering_method:        "kmeans"
+  number_of_spatial_clusters: null
+  max_clusters:             8
+
+models:
+  run_majority_dummy:          true
+  run_stratified_dummy:        true
+  run_ec_only_logistic:        true
+  run_regularized_logistic:    true
+  run_random_forest:           true
+  run_gradient_boosted_tree:   true
+  run_svm:                     false
+
+outputs:
+  write_fold_predictions: true
+  write_shap_values:      true
+  write_gis_exports:      true

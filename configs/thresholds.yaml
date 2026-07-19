@@ -1,0 +1,68 @@
+targets:
+  Na:
+    column: "Na"
+    unit: "mg/L"
+    threshold_value: 150.0
+    threshold_source: "Precautionary risk-alert threshold: 75% of WHO/Ghana Standard"
+    exceedance_direction: "greater_than"
+    notes: "Early-warning screening threshold set at 75% of the 200 mg/L WHO/Ghana guideline"
+
+  Cl:
+    column: "Cl"
+    unit: "mg/L"
+    threshold_value: 187.5
+    threshold_source: "Precautionary risk-alert threshold: 75% of WHO/Ghana Standard"
+    exceedance_direction: "greater_than"
+    notes: "Early-warning screening threshold set at 75% of the 250 mg/L WHO/Ghana guideline"
+
+  TDS:
+    column: "TDS"
+    unit: "mg/L"
+    threshold_value: 750.0
+    threshold_source: "Precautionary risk-alert threshold: 75% of WHO/Ghana Standard"
+    exceedance_direction: "greater_than"
+    notes: "Early-warning screening threshold set at 75% of the 1000 mg/L WHO/Ghana guideline"
+
+  B:
+    column: "B"
+    unit: "mg/L"
+    threshold_value: 1.125
+    threshold_source: "Precautionary risk-alert threshold: 75% of WHO 2017"
+    exceedance_direction: "greater_than"
+    notes: "Early-warning screening threshold set at 75% of the 1.5 mg/L WHO guideline"
+
+  F:
+    column: "F"
+    unit: "mg/L"
+    threshold_value: 1.125
+    threshold_source: "Precautionary risk-alert threshold: 75% of WHO"
+    exceedance_direction: "greater_than"
+    notes: "Early-warning screening threshold set at 75% of the 1.5 mg/L WHO guideline"
+
+  NO3:
+    column: "NO3"
+    unit: "mg/L"
+    threshold_value: 37.5
+    threshold_source: "Precautionary risk-alert threshold: 75% of WHO"
+    exceedance_direction: "greater_than"
+    notes: "Early-warning screening threshold set at 75% of the 50 mg/L WHO nitrate guideline"
+
+bdl_substitution:
+  method: "limit_div_sqrt2"
+  use_min_detected_fallback: true
+  detection_limits:
+    # Replace null values with laboratory LODs when available.
+    # Until then, the pipeline uses each analyte's minimum detected value
+    # as a conservative documented fallback for plain "bdl" entries.
+    CO3:
+      value: null
+      unit: "mg/L"
+      source: "not provided; fallback uses minimum detected value"
+    F:
+      value: null
+      unit: "mg/L"
+      source: "not provided; fallback uses minimum detected value"
+    NO3:
+      value: null
+      unit: "mg/L"
+      source: "not provided; fallback uses minimum detected value"

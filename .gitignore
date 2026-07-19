@@ -1,0 +1,46 @@
+# Rust build products
+/target/
+
+# Raw or potentially sensitive study inputs
+/data/
+/manuscript/Outline.txt
+
+# Generated databases, exports, reports, figures, and tables
+/outputs/
+/reports/
+/figures/
+/manuscript/artifacts/
+
+# Generated source bundle (the canonical sources are in src/)
+/rust_backend_code_bundle.txt
+
+# Local databases and transient SQLite files
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+
+# Logs, caches, and temporary files
+*.log
+*.bak
+*.tmp
+*.swp
+*~
+.DS_Store
+Thumbs.db
+__pycache__/
+*.py[cod]
+.Rhistory
+.RData
+.Ruserdata
+.vscode/
+.idea/
+
+# Manuscript working files are maintained outside this code repository
+*.doc
+*.docx
+*.pdf
+*.ppt
+*.pptx
+*.xls
+*.xlsx

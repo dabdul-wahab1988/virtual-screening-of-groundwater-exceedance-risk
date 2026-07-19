@@ -1,0 +1,72 @@
+global_forbidden_patterns:
+  - "_exceedance"
+  - "_label"
+  - "_class"
+  - "_exceeds"
+  - "_binary"
+
+targets:
+  Na:
+    forbidden_exact:
+      - "Na"
+    forbidden_contains:
+      - "Na_"
+      - "_Na"
+      - "SAR"
+      - "sodium"
+    notes: "SAR = Na/sqrt(0.5*(Ca+Mg)) — contains Na directly"
+
+  Cl:
+    forbidden_exact:
+      - "Cl"
+    forbidden_contains:
+      - "Cl_"
+      - "_Cl"
+      - "Cl_HCO3"
+      - "chloride"
+    notes: "Cl/HCO3 ratio contains Cl directly"
+
+  TDS:
+    forbidden_exact:
+      - "TDS"
+    forbidden_contains:
+      - "TDS_"
+      - "_TDS"
+      - "salinity"
+    special_models:
+      TDS_EC_inclusive:
+        allow:
+          - "EC"
+        notes: "Sensitivity model: allows EC as predictor (EC~TDS is not exact)"
+      TDS_EC_strict:
+        forbidden_exact:
+          - "EC"
+        notes: "Conservative model: removes EC due to high TDS/EC correlation"
+
+  B:
+    forbidden_exact:
+      - "B"
+    forbidden_contains:
+      - "B_"
+      - "_B"
+      - "boron"
+    notes: "Remove boron and all derived ratios"
+
+  F:
+    forbidden_exact:
+      - "F"
+    forbidden_contains:
+      - "F_"
+      - "_F"
+      - "fluoride"
+    notes: "Remove fluoride and all derived ratios"
+
+  NO3:
+    forbidden_exact:
+      - "NO3"
+    forbidden_contains:
+      - "NO3_"
+      - "_NO3"
+      - "nitrate"
+      - "nitrogen"
+    notes: "Remove nitrate and all derived ratio features"
