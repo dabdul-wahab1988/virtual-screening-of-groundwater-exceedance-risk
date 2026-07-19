@@ -212,8 +212,10 @@ The scripts under `manuscript/` and `scripts/` consume the generated SQLite data
 
 ## Citation
 
-If you use this software, cite the associated groundwater virtual-screening manuscript and archive the exact repository commit used for analysis. A formal citation and DOI can be added here when the manuscript or a software release is published.
+If you use this software, please cite:
+
+> Abdul-Wahab, D. & Sunkari, E. D. (2026). *Virtual screening of groundwater exceedance risk* (Version 0.1.0) [Computer software]. Zenodo. [https://doi.org/10.5281/zenodo.21442254](https://doi.org/10.5281/zenodo.21442254)
 
 ## License
 
-No software license has yet been added. Unless a license is provided, copyright remains with the authors and reuse is not automatically granted. Open an issue in this repository for permissions or collaboration enquiries.
+This project is licensed under the [MIT License](LICENSE).

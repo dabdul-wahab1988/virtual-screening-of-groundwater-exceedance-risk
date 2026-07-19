@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 description = "Leakage-controlled virtual screening of groundwater quality exceedance — Pru Basin, Ghana"
 authors = ["Dr. Sukari Research Group"]
+license = "MIT"
 
 [[bin]]
 name = "gvs"
