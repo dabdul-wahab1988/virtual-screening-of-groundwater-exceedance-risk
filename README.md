@@ -1,5 +1,7 @@
 # Virtual Screening of Groundwater Exceedance Risk
 
+[![Security Guard](https://github.com/dabdul-wahab1988/virtual-screening-of-groundwater-exceedance-risk/actions/workflows/sec-guard.yml/badge.svg?branch=main)](https://github.com/dabdul-wahab1988/virtual-screening-of-groundwater-exceedance-risk/actions/workflows/sec-guard.yml)
+
 Reproducible, leakage-controlled machine learning for prioritising groundwater wells for confirmatory monitoring in Ghana's Pru Basin.
 
 The project provides a Rust command-line pipeline that turns groundwater chemistry measurements into validated exceedance-risk estimates. It compares practical predictor tiers, evaluates models under both repeated nested and spatially grouped cross-validation, records the full analysis in SQLite, and exports analysis-ready CSV files for statistical graphics and GIS workflows.
