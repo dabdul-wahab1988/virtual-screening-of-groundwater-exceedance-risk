@@ -256,14 +256,14 @@ CREATE TABLE IF NOT EXISTS model_hyperparameters (
     hyperparameter_value TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS fold_attribution_base_values (
+CREATE TABLE IF NOT EXISTS fold_base_values (
     bv_id                  INTEGER PRIMARY KEY AUTOINCREMENT,
     run_id                 TEXT NOT NULL REFERENCES model_runs(run_id),
     cv_mode                TEXT NOT NULL,
     repeat_index           INTEGER NOT NULL,
     fold_index             INTEGER NOT NULL,
-    base_value_logit       REAL,
-    base_value_prob        REAL,
+    shap_base_value_logit  REAL,
+    shap_base_value_prob   REAL,
     train_fold_prevalence  REAL NOT NULL
 );
 
@@ -288,7 +288,7 @@ CREATE TABLE IF NOT EXISTS fold_metrics (
     n_test_pos             INTEGER,
     n_test_neg             INTEGER,
     train_time_ms          INTEGER,
-    attribution_computation_time_ms INTEGER
+    shap_computation_time_ms INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS well_predictions (
@@ -315,21 +315,21 @@ CREATE TABLE IF NOT EXISTS fold_feature_tracking (
     fold_index         INTEGER NOT NULL,
     feature_name       TEXT NOT NULL,
     is_selected        INTEGER NOT NULL DEFAULT 1,
-    mean_absolute_attribution REAL,
+    mean_absolute_shap REAL,
     selection_reason   TEXT
 );
 
--- Path-based (Saabas-style) feature attributions. Never labelled SHAP:
--- these are NOT exact interventional TreeSHAP values.
-CREATE TABLE IF NOT EXISTS feature_attributions (
-    attribution_id       INTEGER PRIMARY KEY AUTOINCREMENT,
+-- Exact interventional TreeSHAP values (Lundberg et al., 2018), computed with
+-- the training-fold data as the background distribution.
+CREATE TABLE IF NOT EXISTS shap_values (
+    shap_id              INTEGER PRIMARY KEY AUTOINCREMENT,
     run_id               TEXT NOT NULL REFERENCES model_runs(run_id),
     sample_id            TEXT NOT NULL REFERENCES raw_samples(sample_id),
     cv_mode              TEXT NOT NULL,
     repeat_index         INTEGER NOT NULL,
     fold_index           INTEGER NOT NULL,
     feature_name         TEXT NOT NULL,
-    attribution_value    REAL NOT NULL,
+    shap_value           REAL NOT NULL,
     feature_raw_value    REAL,
     feature_cleaned_value REAL
 );
@@ -487,8 +487,8 @@ CREATE INDEX IF NOT EXISTS idx_fold_assign_run   ON fold_assignments(target_cont
 CREATE INDEX IF NOT EXISTS idx_fold_metrics_run  ON fold_metrics(run_id);
 CREATE INDEX IF NOT EXISTS idx_well_pred_run     ON well_predictions(run_id);
 CREATE INDEX IF NOT EXISTS idx_well_pred_sample  ON well_predictions(sample_id);
-CREATE INDEX IF NOT EXISTS idx_attr_run          ON feature_attributions(run_id);
-CREATE INDEX IF NOT EXISTS idx_attr_feature      ON feature_attributions(feature_name);
+CREATE INDEX IF NOT EXISTS idx_shap_run          ON shap_values(run_id);
+CREATE INDEX IF NOT EXISTS idx_shap_feature      ON shap_values(feature_name);
 CREATE INDEX IF NOT EXISTS idx_model_runs_target ON model_runs(target_contaminant, predictor_tier, algorithm);
 CREATE INDEX IF NOT EXISTS idx_screening_target  ON screening_priority(target_contaminant);
 "#;

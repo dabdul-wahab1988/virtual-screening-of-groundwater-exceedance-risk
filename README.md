@@ -195,7 +195,7 @@ For a new study, copy the configuration files, document every threshold source, 
 - PR-AUC is the inner-CV tuning criterion because exceedances are imbalanced.
 - Both discrimination and calibration metrics are exported.
 - Spatial CV estimates geographic-transfer performance and should not be conflated with randomly stratified CV.
-- Tree explanations are path-based/Saabas-style feature attributions, not exact interventional TreeSHAP values; the term "SHAP" is intentionally never used for them. Linear-model attributions are exact additive logit decompositions (bias + sum of w_j*z_j). See [`DECISIONS.md`](DECISIONS.md) for this and other implementation choices.
+- Tree explanations are exact interventional TreeSHAP values (Lundberg et al., 2018) computed with the training-fold data as the background distribution; linear-model explanations are exact SHAP values (Lundberg & Lee, 2017). The decomposition is exactly additive (base value + sum of SHAP values = model output). See [`DECISIONS.md`](DECISIONS.md) for this and other implementation choices.
 - Operational probability cutoffs are selected inside each outer fold from inner-CV validation predictions only (fully nested threshold selection), frozen, and applied to the held-out test fold; the pooled post-hoc cutoffs are retained as a labelled comparison.
 - Spatial folds containing a single outcome class are retained and flagged (`fold_composition`); pooled spatial metrics are computed across all unique held-out wells (`pooled_metrics`, scope `all_held_out`) and separately across binary-valid folds only.
 - The principal decision-support presentation uses well-level consolidated out-of-fold predictions (median probability per well; each well contributes once) with unique-well TP/TN/FP/FN counts.

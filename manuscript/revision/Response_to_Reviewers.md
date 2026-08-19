@@ -24,7 +24,7 @@ Our response structure follows the reviewer-issue matrix (see REVISION_AUDIT_REP
 
 **R1-04 (Novelty).** *"The novelty of the work should be highlighted, and it should be stated what literature you have that has not been addressed so far."*
 
-**Response (AGREE).** Section 1 now contains an explicit novelty statement: the integrated validation architecture (target-specific leakage control, tiered field-to-chemistry predictors, repeated nested CV with fully nested cutoff selection, transparent spatial-group validation including single-class folds, well-level decision metrics, prevalence-benchmarked Brier scores, path-based attribution) has not previously been combined in a single small-sample groundwater-screening study. The knowledge gap relative to earlier deterministic hydrochemical classification (Sunkari et al., 2021) and to recent Ghanaian ensemble studies that lacked spatial cross-validation (Ansah-Narh et al., 2026) is stated.
+**Response (AGREE).** Section 1 now contains an explicit novelty statement: the integrated validation architecture (target-specific leakage control, tiered field-to-chemistry predictors, repeated nested CV with fully nested cutoff selection, transparent spatial-group validation including single-class folds, well-level decision metrics, prevalence-benchmarked Brier scores, exact TreeSHAP attribution) has not previously been combined in a single small-sample groundwater-screening study. The knowledge gap relative to earlier deterministic hydrochemical classification (Sunkari et al., 2021) and to recent Ghanaian ensemble studies that lacked spatial cross-validation (Ansah-Narh et al., 2026) is stated.
 
 **R1-05 to R1-17 (Suggested references).** *Lists of DOIs for the opening paragraph, knowledge gap, methodology, Discussion and Introduction.*
 
@@ -87,7 +87,7 @@ Our response structure follows the reviewer-issue matrix (see REVISION_AUDIT_REP
 
 **R2-07 (Validate Saabas attribution with exact Shapley for a subset).** *"...have you considered validating these attributions with a more exact Shapley value approximation for a subset of models to ensure consistency?"*
 
-**Response (AGREE, with a scope statement).** Exact interventional TreeSHAP requires per-tree path enumeration with exponential subset summation; for the native Rust tree implementation used here we did not implement an exact Shapley evaluator. Instead, we (i) removed the term "SHAP" from every reader-facing artifact — the values are consistently described as path-based (Saabas-style) attributions and are never labelled as SHAP (Gate 5); (ii) corrected the linear-model attribution to an exact additive logit decomposition (bias + Σ wⱼzⱼ), which is exactly additive; and (iii) documented the approximation status in the Methods (Section 2.10) and Supplementary Methods S10. We note that an exact-vs-approximate consistency check would require an independent TreeSHAP implementation, which is planned as future work; we preferred honest terminology over an unverifiable "validation" of a renamed quantity.
+**Response (AGREE).** Rather than validating an approximation, we implemented the exact method and replaced the approximation entirely. Exact interventional TreeSHAP (Lundberg et al., 2018) is now computed for every tree model, with the training-fold data as the background distribution; linear-model attributions are exact SHAP values (Lundberg & Lee, 2017). The implementation is validated by unit tests against brute-force Shapley enumeration (including trees with a repeated split feature and class-weighted backgrounds), and the stored values satisfy exact additivity (base value + Σ SHAP = model output). All attribution outputs (Figure 6, Supplementary Table S5, database, exports) were regenerated from the exact values, and the terminology is now used correctly throughout.
 
 **R2-08 (Calibration uncertainty source).** *"...does this uncertainty primarily stem from the small sample size, or is it indicative of a more fundamental lack of structure..."*
 
@@ -233,7 +233,7 @@ Our response structure follows the reviewer-issue matrix (see REVISION_AUDIT_REP
 
 **R4-08 (SHAP vs Saabas terminology).** *"...these methods are not equivalent; terminology should be corrected or exact TreeSHAP values should be calculated."**
 
-**Response (AGREE).** Exact TreeSHAP is not implemented; therefore the term "SHAP" has been removed from every reader-facing artifact: manuscript, Supplementary Material, table headings, figure captions, figure axis labels, database schema (tables renamed `shap_values` → `feature_attributions`, `fold_base_values` → `fold_attribution_base_values`), export filenames (`shap_values_long.csv` → `feature_attributions_long.csv`), and the regenerated figures. The method is consistently described as path-based (Saabas-style) attribution, and linear-model attributions are now the exact additive logit decomposition (Section 2.10; Supplementary Methods S10). A grep audit confirms zero occurrences of "SHAP" in the revised artifacts (Gate 5).
+**Response (AGREE).** Exact interventional TreeSHAP (Lundberg et al., 2018) is now calculated for every tree model with the training-fold data as the background distribution, and linear-model attributions are exact SHAP values (Lundberg & Lee, 2017). The implementation is validated by unit tests against brute-force Shapley enumeration and exact additivity checks, and the term SHAP is now used only for these genuine SHAP values — in the manuscript, Supplementary Methods S10, Figure 6, Supplementary Table S5, the database schema (`shap_values`, `fold_base_values`) and exports (`shap_values_long.csv`), all regenerated (Gate 5).
 
 **R4-09 (FP/FN counts under repeated CV).** *"...whether repeated predictions from the same well contributed more than once to these counts."**
 
@@ -253,7 +253,7 @@ Our response structure follows the reviewer-issue matrix (see REVISION_AUDIT_REP
 4. **Coordinate ablation** for all tiers (R2-03; Phase 3D).
 5. **Concentration-threshold sensitivity** at current WHO guideline values (R4-01; Phase 3E).
 6. **Small-sample audit** with per-fold diagnostics and restricted tree depth (R4-02; Phase 3F).
-7. **SHAP terminology eliminated**; path-based attribution naming everywhere; linear attributions made exactly additive (R2-07, R4-08; Phase 3G).
+7. **Exact interventional TreeSHAP implemented** for all tree models (validated against brute-force Shapley; exact additivity), with genuine SHAP terminology restored for trees and exact linear SHAP for linear models (R2-07, R4-08; Phase 3G).
 8. **BDL sensitivity** for F with label invariance demonstrated (R2-11, R2-18; Phase 3H).
 9. **F₂ rationale + β sensitivity** (F1, F1.5, F2, F3) (R2-14; Phase 3I).
 10. **Brier null baseline and skill score** (R2-20; Phase 3J).
@@ -264,4 +264,5 @@ Our response structure follows the reviewer-issue matrix (see REVISION_AUDIT_REP
 15. **Claim discipline** throughout: screening probability ≠ contamination status; no temporal or external-validation claims (R3-04, R3-10, R3-11; Phase 6).
 
 Every number in the revised manuscript was regenerated from the revised pipeline and is traceable to the archived database or exports; the reproducibility audit (Phase 1) confirmed that the previously submitted headline numbers were correctly reproduced from the original code and data before the methodological revision.
+
 

@@ -762,8 +762,8 @@ fn run_target_with_variant(
             "fold_metrics",
             "fold_composition",
             "well_predictions",
-            "feature_attributions",
-            "fold_attribution_base_values",
+            "shap_values",
+            "fold_base_values",
             "fold_feature_tracking",
             "model_hyperparameters",
             "operational_thresholds",
@@ -1103,9 +1103,11 @@ fn run_target_with_variant(
                 )?;
             }
 
-            // ── Attributions (path-based; never labelled SHAP) ───────
+            // ── SHAP values (exact interventional TreeSHAP for trees;
+            //    exact linear SHAP for linear models) ───────────────────
             let attr_start = Instant::now();
-            let attr_result = attribution::compute_attributions(model.as_ref(), &x_test_scaled);
+            let attr_result =
+                attribution::compute_shap(model.as_ref(), &x_test_scaled, class_weight);
             let train_prev =
                 y_train.iter().filter(|&&v| v == 1).count() as f64 / y_train.len() as f64;
 
@@ -1118,7 +1120,7 @@ fn run_target_with_variant(
                 &attr_result,
                 train_prev,
             )?;
-            attribution::store_attribution_values(
+            attribution::store_shap_values(
                 conn,
                 &run_id,
                 &ids_test,
@@ -1141,7 +1143,7 @@ fn run_target_with_variant(
 
             let attr_ms = attr_start.elapsed().as_millis() as i64;
             conn.execute(
-                "UPDATE fold_metrics SET attribution_computation_time_ms = ?1
+                "UPDATE fold_metrics SET shap_computation_time_ms = ?1
                  WHERE run_id = ?2 AND cv_mode = ?3 AND repeat_index = ?4 AND fold_index = ?5",
                 rusqlite::params![
                     attr_ms,

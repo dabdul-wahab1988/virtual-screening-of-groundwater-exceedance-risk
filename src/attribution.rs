@@ -1,18 +1,15 @@
 use crate::models::Model;
 
-/// Compute path-based / additive feature attributions for any model.
+/// Compute exact SHAP values for any model (Lundberg & Lee, 2017).
 ///
-/// Tree models: Saabas-style path-dependent contributions computed by
-/// descending each fitted tree along the sample path and attributing the
-/// expected-value change at each split to the split feature. These are NOT
-/// exact interventional TreeSHAP values (Lundberg et al., 2018): Saabas
-/// attribution is a path-dependent approximation that ignores off-path
-/// interactions, and the term "SHAP" must not be used for them.
+/// Tree models: exact interventional TreeSHAP values (Lundberg et al., 2018)
+/// computed with the training-fold data as the background distribution; the
+/// decomposition is exactly additive (base value + sum of SHAP values = model
+/// output).
 ///
-/// Linear models: exact additive decomposition of the logit. For a
-/// standardised logistic regression logit(x) = b + sum_j w_j * z_j, the
-/// contribution of feature j is phi_j = w_j * z_j and the base value is the
-/// bias b, so that sum_j phi_j = logit(x) - b exactly.
+/// Linear models: exact SHAP values for the standardised logistic regression,
+/// phi_j = w_j * z_j with base = bias, so sum_j phi_j = logit(x) - bias
+/// exactly (the training background has zero mean on standardised features).
 pub struct AttributionResult {
     /// shape: [n_samples × n_features]
     pub values: Vec<Vec<f64>>,
@@ -20,11 +17,15 @@ pub struct AttributionResult {
     pub base_value_logit: f64,
     /// base value in probability space
     pub base_value_prob: f64,
-    /// mean absolute attribution per feature
-    pub mean_abs_attribution: Vec<f64>,
+    /// mean absolute SHAP per feature
+    pub mean_abs_shap: Vec<f64>,
 }
 
-pub fn compute_attributions(model: &dyn Model, x: &[Vec<f64>]) -> AttributionResult {
+pub fn compute_shap(
+    model: &dyn Model,
+    x: &[Vec<f64>],
+    class_weight: f64,
+) -> AttributionResult {
     let n_features = if x.is_empty() { 0 } else { x[0].len() };
     let n_samples = x.len();
 
@@ -32,7 +33,7 @@ pub fn compute_attributions(model: &dyn Model, x: &[Vec<f64>]) -> AttributionRes
     let base_value_prob = crate::utils::sigmoid(base_value_logit);
 
     let values: Vec<Vec<f64>> = if model.supports_tree_attribution() {
-        model.tree_attributions(x)
+        model.tree_attributions(x, class_weight)
     } else if let Some(weights) = model.linear_weights(n_features) {
         // Exact additive logit decomposition on the standardised features:
         // phi_j = w_j * z_j, base = bias.
@@ -49,8 +50,8 @@ pub fn compute_attributions(model: &dyn Model, x: &[Vec<f64>]) -> AttributionRes
         vec![vec![0.0; n_features]; n_samples]
     };
 
-    // Mean absolute attribution per feature
-    let mean_abs_attribution: Vec<f64> = if values.is_empty() {
+    // Mean absolute SHAP per feature
+    let mean_abs_shap: Vec<f64> = if values.is_empty() {
         vec![0.0; n_features]
     } else {
         (0..n_features)
@@ -62,13 +63,13 @@ pub fn compute_attributions(model: &dyn Model, x: &[Vec<f64>]) -> AttributionRes
         values,
         base_value_logit,
         base_value_prob,
-        mean_abs_attribution,
+        mean_abs_shap,
     }
 }
 
 /// Store attribution values in SQLite for a specific run/fold.
 #[allow(clippy::too_many_arguments)]
-pub fn store_attribution_values(
+pub fn store_shap_values(
     conn: &rusqlite::Connection,
     run_id: &str,
     sample_ids: &[String],
@@ -89,9 +90,9 @@ pub fn store_attribution_values(
             }
             let raw_val = x_raw.get(i).and_then(|row| row.get(j)).copied();
             conn.execute(
-                "INSERT INTO feature_attributions
+                "INSERT INTO shap_values
                  (run_id, sample_id, cv_mode, repeat_index, fold_index,
-                  feature_name, attribution_value, feature_raw_value, feature_cleaned_value)
+                  feature_name, shap_value, feature_raw_value, feature_cleaned_value)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
                 rusqlite::params![
                     run_id,
@@ -121,9 +122,9 @@ pub fn store_fold_base_values(
     train_prevalence: f64,
 ) -> anyhow::Result<()> {
     conn.execute(
-        "INSERT INTO fold_attribution_base_values
-         (run_id, cv_mode, repeat_index, fold_index, base_value_logit,
-          base_value_prob, train_fold_prevalence)
+        "INSERT INTO fold_base_values
+         (run_id, cv_mode, repeat_index, fold_index, shap_base_value_logit,
+          shap_base_value_prob, train_fold_prevalence)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         rusqlite::params![
             run_id,
@@ -149,11 +150,11 @@ pub fn store_fold_feature_tracking(
     attr: &AttributionResult,
 ) -> anyhow::Result<()> {
     for (j, feat) in feature_names.iter().enumerate() {
-        let mas = attr.mean_abs_attribution.get(j).copied().unwrap_or(0.0);
+        let mas = attr.mean_abs_shap.get(j).copied().unwrap_or(0.0);
         conn.execute(
             "INSERT INTO fold_feature_tracking
              (run_id, cv_mode, repeat_index, fold_index, feature_name,
-              is_selected, mean_absolute_attribution, selection_reason)
+              is_selected, mean_absolute_shap, selection_reason)
              VALUES (?1, ?2, ?3, ?4, ?5, 1, ?6, 'included_by_leakage_filter')",
             rusqlite::params![run_id, cv_mode, repeat as i64, fold as i64, feat, mas,],
         )?;

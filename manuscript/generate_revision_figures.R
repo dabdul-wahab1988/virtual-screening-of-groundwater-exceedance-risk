@@ -3,7 +3,8 @@
 # Regenerates ALL publication figures for the revised manuscript from the
 # revised reproducibility database (outputs/rev2/main/main.db).
 #
-# Terminology: path-based feature attribution (Saabas-style) — never "SHAP".
+# Terminology: exact interventional TreeSHAP values (Lundberg et al., 2018)
+# for tree models; exact linear SHAP values for linear models.
 # Screening priority uses the four documented probability bands
 # (Low <0.25, Moderate 0.25-0.50, High 0.50-0.75, Very_High >=0.75).
 # Spatial headline metrics are POOLED across all unique held-out wells
@@ -295,13 +296,13 @@ p5 <- ggplot(calib_df, aes(x = mean_pred, y = obs_frac, colour = algorithm)) +
 save_fig(p5, "Figure5_calibration_curves", width = 11, height = 7)
 
 # =============================================================================
-# FIGURE 6 — Path-based feature attribution importance
+# FIGURE 6 — SHAP feature importance (exact interventional TreeSHAP)
 # =============================================================================
 cat("Figure 6...\n")
 attr_raw <- dbGetQuery(con, "
-  SELECT fa.feature_name, fa.attribution_value,
+  SELECT fa.feature_name, fa.shap_value,
          mr.target_contaminant
-  FROM feature_attributions fa
+  FROM shap_values fa
   JOIN model_runs mr ON fa.run_id = mr.run_id
   WHERE mr.run_status = 'completed'
     AND mr.target_contaminant IN ('Na','Cl','TDS','B','F')
@@ -311,16 +312,16 @@ attr_raw <- dbGetQuery(con, "
 ")
 attr_mean <- attr_raw %>%
   group_by(target_contaminant, feature_name) %>%
-  summarise(mean_abs = mean(abs(attribution_value), na.rm = TRUE), .groups = "drop") %>%
+  summarise(mean_abs_shap = mean(abs(shap_value), na.rm = TRUE), .groups = "drop") %>%
   group_by(target_contaminant) %>%
-  slice_max(mean_abs, n = 10) %>%
+  slice_max(mean_abs_shap, n = 10) %>%
   ungroup() %>%
   mutate(target_contaminant = factor(target_contaminant,
                                      levels = c("Na", "Cl", "TDS", "B", "F"))) %>%
   group_by(target_contaminant) %>%
-  mutate(feature_name = reorder(feature_name, mean_abs)) %>%
+  mutate(feature_name = reorder(feature_name, mean_abs_shap)) %>%
   ungroup()
-p6 <- ggplot(attr_mean, aes(x = mean_abs, y = feature_name,
+p6 <- ggplot(attr_mean, aes(x = mean_abs_shap, y = feature_name,
                             colour = target_contaminant)) +
   geom_segment(aes(xend = 0, yend = feature_name), linewidth = 1.5, alpha = 0.7) +
   geom_point(size = 5, alpha = 0.95) +
@@ -328,13 +329,13 @@ p6 <- ggplot(attr_mean, aes(x = mean_abs, y = feature_name,
   scale_y_discrete(labels = pm_scale(FEAT_PM)) +
   scale_x_continuous(labels = function(x) sprintf("%.3f", x),
                      expand = expansion(mult = c(0.02, 0.08))) +
-  labs(x = "Mean absolute path-based attribution", y = NULL) +
+  labs(x = expression("|SHAP value|" ~ (mean ~ absolute)), y = NULL) +
   facet_wrap(~ target_contaminant, scales = "free_y", nrow = 2, ncol = 3,
              labeller = pm_labeller(ION_PM)) +
   nature_theme() +
   theme(legend.position = "none", strip.text = element_text(size = 14, face = "bold"),
         axis.text.y = element_text(size = 13), axis.text.x = element_text(size = 12))
-save_fig(p6, "Figure6_path_attribution_importance", width = 14, height = 9)
+save_fig(p6, "Figure6_SHAP_importance", width = 14, height = 9)
 
 # =============================================================================
 # FIGURE 7 — Screening priority maps (four documented bands)

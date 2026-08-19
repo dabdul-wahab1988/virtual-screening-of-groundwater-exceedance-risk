@@ -16,12 +16,15 @@ pub trait Model: Send {
     fn feature_importances(&self, n_features: usize) -> Vec<f64>;
     /// JSON string of selected hyperparameters.
     fn hyperparams_json(&self) -> String;
-    /// Whether tree-based path (Saabas-style) attribution is supported.
+    /// Whether tree-based exact interventional TreeSHAP is supported.
     fn supports_tree_attribution(&self) -> bool {
         false
     }
-    /// Compute per-sample path-based feature attributions (Saabas method).
-    fn tree_attributions(&self, _x: &[Vec<f64>]) -> Vec<Vec<f64>> {
+    /// Compute per-sample exact interventional TreeSHAP values (Lundberg et
+    /// al., 2018) with the training-fold data as the background distribution.
+    /// `class_weight` is the positive-class weight used at fit time (needed
+    /// for the weighted background covers of classification trees).
+    fn tree_attributions(&self, _x: &[Vec<f64>], _class_weight: f64) -> Vec<Vec<f64>> {
         vec![]
     }
     /// Raw linear coefficients (standardised-feature space), if the model is
@@ -275,6 +278,185 @@ impl TreeNode {
             TreeNode::Leaf { n, .. } | TreeNode::Split { n, .. } => *n,
         }
     }
+
+    pub fn node_n_pos(&self) -> usize {
+        match self {
+            TreeNode::Leaf { n_pos, .. } | TreeNode::Split { n_pos, .. } => *n_pos,
+        }
+    }
+}
+
+// ── Exact interventional TreeSHAP (Lundberg et al., 2018) ────────────────────
+//
+// Exact Shapley values for a single tree with the training-fold data as the
+// background distribution. For a path P of split features along the sample's
+// route, features off the path contribute zero, and the contribution of path
+// feature j is
+//   phi_j = sum_{T subset P \ {j}} W(|T|) * [v(T u {j}) - v(T)]
+// with W(t) = sum_{k=0}^{M-|P|} C(M-|P|, k) * (t+k)! (M-t-k-1)! / M!,
+// where M is the total number of features and v(T) is the expected node value
+// when the features in T are fixed to the sample's values and the rest are
+// marginalised over the background. Background covers are the node sample
+// counts (weighted by the positive-class weight for classification trees, so
+// that the decomposition is exactly additive: sum_j phi_j = f(x) - E[f]).
+//
+// Complexity is O(2^|P| * depth) per sample per tree; with max_depth <= 4 this
+// is negligible for the 81-sample dataset.
+
+fn node_cover(node: &TreeNode, weighted: bool, class_weight: f64) -> f64 {
+    let n = node.node_n() as f64;
+    if weighted {
+        let n_pos = node.node_n_pos() as f64;
+        (n - n_pos) + class_weight * n_pos
+    } else {
+        n
+    }
+}
+
+/// Expected value over the background given the fixed-feature subset mask
+/// (mask bits index the unique features on the sample's path).
+fn tree_shap_expectation(
+    node: &TreeNode,
+    path: &[(usize, &TreeNode, &TreeNode)],
+    mask: usize,
+    weighted: bool,
+    class_weight: f64,
+) -> f64 {
+    match node {
+        TreeNode::Leaf { prob, .. } => *prob,
+        TreeNode::Split {
+            left,
+            right,
+            ..
+        } => {
+            // Locate this split node in the path (by node identity).
+            let mut fixed = false;
+            let mut follows_left = false;
+            for (bit, child, split_ref) in path.iter() {
+                if std::ptr::eq(*split_ref, node) {
+                    if mask & (1 << bit) != 0 {
+                        fixed = true;
+                    }
+                    follows_left = std::ptr::eq(*child, left.as_ref());
+                    break;
+                }
+            }
+            if fixed {
+                if follows_left {
+                    tree_shap_expectation(left, path, mask, weighted, class_weight)
+                } else {
+                    tree_shap_expectation(right, path, mask, weighted, class_weight)
+                }
+            } else {
+                let c = node_cover(node, weighted, class_weight);
+                let cl = node_cover(left, weighted, class_weight);
+                let cr = node_cover(right, weighted, class_weight);
+                if c <= 0.0 {
+                    return node.node_prob();
+                }
+                (cl * tree_shap_expectation(left, path, mask, weighted, class_weight)
+                    + cr * tree_shap_expectation(right, path, mask, weighted, class_weight))
+                    / c
+            }
+        }
+    }
+}
+
+/// Exact interventional TreeSHAP values for one tree and one sample.
+fn exact_tree_shap_values(
+    tree: &TreeNode,
+    x: &[f64],
+    n_features: usize,
+    weighted: bool,
+    class_weight: f64,
+) -> Vec<f64> {
+    let mut contrib = vec![0.0f64; n_features];
+
+    // Collect the sample's path; the same feature may appear at several
+    // depths, so subsets are defined over the UNIQUE features on the path.
+    let mut raw_path: Vec<(usize, &TreeNode, &TreeNode)> = Vec::new(); // (feature, child, split node)
+    let mut cur = tree;
+    loop {
+        match cur {
+            TreeNode::Leaf { .. } => break,
+            TreeNode::Split {
+                feature_idx,
+                threshold,
+                left,
+                right,
+                ..
+            } => {
+                let child = if x[*feature_idx] <= *threshold {
+                    left.as_ref()
+                } else {
+                    right.as_ref()
+                };
+                raw_path.push((*feature_idx, child, cur));
+                cur = child;
+            }
+        }
+    }
+
+    // Unique features in path order, with bit indices.
+    let mut unique: Vec<usize> = Vec::new();
+    let mut path: Vec<(usize, &TreeNode, &TreeNode)> = Vec::new();
+    for (fj, child, split_ref) in raw_path {
+        let bit = match unique.iter().position(|&u| u == fj) {
+            Some(b) => b,
+            None => {
+                unique.push(fj);
+                unique.len() - 1
+            }
+        };
+        path.push((bit, child, split_ref));
+    }
+
+    let p = unique.len();
+    if p == 0 || n_features == 0 {
+        return contrib;
+    }
+    let m = n_features;
+
+    // Precompute W(t), t = 0..p-1.
+    let mut fact = vec![1.0f64; m + 1];
+    for i in 1..=m {
+        fact[i] = fact[i - 1] * i as f64;
+    }
+    let mut binom = vec![1.0f64; (m - p) + 1];
+    for k in 1..=m - p {
+        // C(m-p, k) via recurrence
+        binom[k] = binom[k - 1] * (m - p - k + 1) as f64 / k as f64;
+    }
+    let mut wts = vec![0.0f64; p];
+    for t in 0..p {
+        let mut s = 0.0;
+        for k in 0..=(m - p) {
+            s += binom[k] * fact[t + k] * fact[m - t - k - 1] / fact[m];
+        }
+        wts[t] = s;
+    }
+
+    // Evaluate v(T) for every subset T of the unique path features.
+    let n_subsets = 1usize << p;
+    let mut v = vec![0.0f64; n_subsets];
+    for mask in 0..n_subsets {
+        v[mask] = tree_shap_expectation(tree, &path, mask, weighted, class_weight);
+    }
+
+    // Contributions.
+    for (bit, &fj) in unique.iter().enumerate() {
+        let b = 1usize << bit;
+        let mut s = 0.0;
+        for mask in 0..n_subsets {
+            if mask & b != 0 {
+                continue;
+            }
+            let t = mask.count_ones() as usize;
+            s += wts[t] * (v[mask | b] - v[mask]);
+        }
+        contrib[fj] += s;
+    }
+    contrib
 }
 
 fn gini_impurity(n_pos: f64, n_total: f64) -> f64 {
@@ -450,42 +632,6 @@ fn build_tree(
     }
 }
 
-/// Path-based feature attribution (Saabas method).
-fn path_attribution(node: &TreeNode, x: &[f64], contrib: &mut Vec<f64>) {
-    match node {
-        TreeNode::Leaf { .. } => {}
-        TreeNode::Split {
-            feature_idx,
-            threshold,
-            left,
-            right,
-            prob: _node_prob,
-            ..
-        } => {
-            let child = if x[*feature_idx] <= *threshold {
-                left
-            } else {
-                right
-            };
-            let other = if x[*feature_idx] <= *threshold {
-                right
-            } else {
-                left
-            };
-            let child_prob = child.node_prob();
-            let other_prob = other.node_prob();
-            let child_n = child.node_n() as f64;
-            let other_n = other.node_n() as f64;
-            let total_n = child_n + other_n;
-            // Expected value at this node vs child
-            let expected = (child_n * child_prob + other_n * other_prob) / total_n;
-            let contribution = child_prob - expected;
-            contrib[*feature_idx] += contribution;
-            path_attribution(child, x, contrib);
-        }
-    }
-}
-
 /// Compute feature importance as total weighted gain over splits.
 fn tree_feature_importance(node: &TreeNode, n_features: usize) -> Vec<f64> {
     let mut imp = vec![0.0f64; n_features];
@@ -579,11 +725,7 @@ impl Model for RandomForest {
             .collect();
 
         let mean_pred = y_f.iter().sum::<f64>() / n as f64;
-        self.base_val = if mean_pred > 0.0 && mean_pred < 1.0 {
-            (mean_pred / (1.0 - mean_pred)).ln()
-        } else {
-            0.0
-        };
+        let _ = mean_pred;
 
         self.trees.clear();
 
@@ -614,6 +756,16 @@ impl Model for RandomForest {
             );
             self.trees.push(tree);
         }
+
+        // SHAP base value: background expectation E[f(x)] = mean of the root
+        // (weighted) probabilities across trees.
+        let t = self.trees.len() as f64;
+        let mean_root: f64 = if t > 0.0 {
+            self.trees.iter().map(|tr| tr.node_prob()).sum::<f64>() / t
+        } else {
+            0.5
+        };
+        self.base_val = crate::utils::logit(mean_root.clamp(1e-6, 1.0 - 1e-6));
     }
 
     fn predict_proba(&self, x: &[Vec<f64>]) -> Vec<f64> {
@@ -655,18 +807,19 @@ impl Model for RandomForest {
         true
     }
 
-    fn tree_attributions(&self, x: &[Vec<f64>]) -> Vec<Vec<f64>> {
+    fn tree_attributions(&self, x: &[Vec<f64>], class_weight: f64) -> Vec<Vec<f64>> {
         let n_feat = self.n_features;
+        let n_trees = self.trees.len() as f64;
         x.iter()
             .map(|xi| {
                 let mut contrib = vec![0.0f64; n_feat];
                 for tree in &self.trees {
-                    let mut c = vec![0.0f64; n_feat];
-                    path_attribution(tree, xi, &mut c);
+                    let c = exact_tree_shap_values(tree, xi, n_feat, true, class_weight);
                     contrib.iter_mut().zip(&c).for_each(|(a, &b)| *a += b);
                 }
-                let t = self.trees.len() as f64;
-                contrib.iter_mut().for_each(|v| *v /= t);
+                if n_trees > 0.0 {
+                    contrib.iter_mut().for_each(|v| *v /= n_trees);
+                }
                 contrib
             })
             .collect()
@@ -837,6 +990,9 @@ pub struct GradientBoostedTrees {
     pub n_estimators: usize,
     pub max_depth: usize,
     initial_log_odds: f64,
+    /// lr * sum over trees of the root mean residual: the exact SHAP base
+    /// value on the log-odds scale (E[logit] = initial + lr*sum(root means)).
+    base_extra: f64,
     n_features: usize,
     min_samples_leaf: usize,
 }
@@ -849,6 +1005,7 @@ impl GradientBoostedTrees {
             n_estimators,
             max_depth,
             initial_log_odds: 0.0,
+            base_extra: 0.0,
             n_features: 0,
             min_samples_leaf: 2,
         }
@@ -914,6 +1071,16 @@ impl Model for GradientBoostedTrees {
             let _ = t;
             self.trees.push(tree);
         }
+
+        // SHAP base value on the log-odds scale: E[logit(x)] over the
+        // training background = initial + lr * sum_t (mean residual of tree t),
+        // where each tree's root stores its mean residual.
+        self.base_extra = self.learning_rate
+            * self
+                .trees
+                .iter()
+                .map(|t| t.node_prob())
+                .sum::<f64>();
     }
 
     fn predict_proba(&self, x: &[Vec<f64>]) -> Vec<f64> {
@@ -956,14 +1123,14 @@ impl Model for GradientBoostedTrees {
         true
     }
 
-    fn tree_attributions(&self, x: &[Vec<f64>]) -> Vec<Vec<f64>> {
+    fn tree_attributions(&self, x: &[Vec<f64>], _class_weight: f64) -> Vec<Vec<f64>> {
         let n_feat = self.n_features;
         x.iter()
             .map(|xi| {
                 let mut contrib = vec![0.0f64; n_feat];
                 for tree in &self.trees {
-                    let mut c = vec![0.0f64; n_feat];
-                    path_attribution(tree, xi, &mut c);
+                    // Regression trees on pseudo-residuals: unweighted covers.
+                    let c = exact_tree_shap_values(tree, xi, n_feat, false, 1.0);
                     contrib
                         .iter_mut()
                         .zip(&c)
@@ -975,7 +1142,7 @@ impl Model for GradientBoostedTrees {
     }
 
     fn attribution_base_logit(&self) -> f64 {
-        self.initial_log_odds
+        self.initial_log_odds + self.base_extra
     }
 }
 
@@ -1265,4 +1432,250 @@ pub fn fixed_model_inner_predictions(
 }
 
 // MetricBundle is used via crate::metrics::MetricBundle directly
+
+// ── Tests ────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pos_of(node: &TreeNode) -> usize {
+        match node {
+            TreeNode::Leaf { n_pos, .. } | TreeNode::Split { n_pos, .. } => *n_pos,
+        }
+    }
+
+    /// Brute-force Shapley values with the same interventional background
+    /// definition: features fixed to the sample's values follow the sample's
+    /// branch; the rest take the cover-weighted average of the children.
+    fn brute_force_shapley(tree: &TreeNode, x: &[f64], n_features: usize) -> Vec<f64> {
+        let m = n_features;
+        let mut fact = vec![1.0f64; m + 1];
+        for i in 1..=m {
+            fact[i] = fact[i - 1] * i as f64;
+        }
+
+        fn v(tree: &TreeNode, x: &[f64], mask: usize) -> f64 {
+            match tree {
+                TreeNode::Leaf { prob, .. } => *prob,
+                TreeNode::Split {
+                    feature_idx,
+                    threshold,
+                    left,
+                    right,
+                    n,
+                    n_left,
+                    n_right,
+                    ..
+                } => {
+                    if mask & (1 << feature_idx) != 0 {
+                        if x[*feature_idx] <= *threshold {
+                            v(left, x, mask)
+                        } else {
+                            v(right, x, mask)
+                        }
+                    } else {
+                        let n_tot = *n as f64;
+                        if n_tot <= 0.0 {
+                            return tree.node_prob();
+                        }
+                        (*n_left as f64 * v(left, x, mask)
+                            + *n_right as f64 * v(right, x, mask))
+                            / n_tot
+                    }
+                }
+            }
+        }
+
+        let mut phi = vec![0.0f64; m];
+        for j in 0..m {
+            let mut s = 0.0;
+            for mask in 0..(1usize << m) {
+                if mask & (1 << j) != 0 {
+                    continue;
+                }
+                let t = mask.count_ones() as usize;
+                let w = fact[t] * fact[m - t - 1] / fact[m];
+                s += w * (v(tree, x, mask | (1 << j)) - v(tree, x, mask));
+            }
+            phi[j] = s;
+        }
+        phi
+    }
+
+    fn make_tree() -> TreeNode {
+        // Root split on feature 0 at 0.5
+        //   left: split on feature 1 at 0.5
+        //     left: leaf 0.2 (n=3, 1 pos)
+        //     right: leaf 0.6 (n=2, 1 pos)
+        //   right: leaf 0.9 (n=5, 4 pos)
+        TreeNode::Split {
+            feature_idx: 0,
+            threshold: 0.5,
+            left: Box::new(TreeNode::Split {
+                feature_idx: 1,
+                threshold: 0.5,
+                left: Box::new(TreeNode::Leaf {
+                    prob: 0.2,
+                    n: 3,
+                    n_pos: 1,
+                    log_odds: -1.386,
+                }),
+                right: Box::new(TreeNode::Leaf {
+                    prob: 0.6,
+                    n: 2,
+                    n_pos: 1,
+                    log_odds: 0.405,
+                }),
+                prob: 0.36,
+                n: 5,
+                n_pos: 2,
+                n_left: 3,
+                n_right: 2,
+            }),
+            right: Box::new(TreeNode::Leaf {
+                prob: 0.9,
+                n: 5,
+                n_pos: 4,
+                log_odds: 2.197,
+            }),
+            prob: 0.63,
+            n: 10,
+            n_pos: 6,
+            n_left: 5,
+            n_right: 5,
+        }
+    }
+
+    #[test]
+    fn treeshap_matches_bruteforce_shapley() {
+        let tree = make_tree();
+        let x = vec![0.2, 0.9, 0.7]; // path: f0 left, f1 right; f2 off path
+        let n_features = 3;
+        let got = exact_tree_shap_values(&tree, &x, n_features, false, 1.0);
+        let want = brute_force_shapley(&tree, &x, n_features);
+        for j in 0..n_features {
+            assert!(
+                (got[j] - want[j]).abs() < 1e-9,
+                "feature {}: TreeSHAP {} vs brute force {}",
+                j,
+                got[j],
+                want[j]
+            );
+        }
+        // Additivity: sum of SHAP + base = f(x).
+        let f_x = tree.predict_prob(&x);
+        let base = tree.node_prob();
+        let sum_contrib: f64 = got.iter().sum();
+        assert!(
+            (base + sum_contrib - f_x).abs() < 1e-9,
+            "additivity violated: base {} + sum {} vs f(x) {}",
+            base,
+            sum_contrib,
+            f_x
+        );
+    }
+
+    #[test]
+    fn treeshap_matches_bruteforce_with_repeated_feature() {
+        // Root splits on f0; the left child splits on f0 AGAIN at 0.2.
+        let tree = TreeNode::Split {
+            feature_idx: 0,
+            threshold: 0.5,
+            left: Box::new(TreeNode::Split {
+                feature_idx: 0,
+                threshold: 0.2,
+                left: Box::new(TreeNode::Leaf {
+                    prob: 0.1,
+                    n: 2,
+                    n_pos: 0,
+                    log_odds: -2.197,
+                }),
+                right: Box::new(TreeNode::Leaf {
+                    prob: 0.4,
+                    n: 3,
+                    n_pos: 1,
+                    log_odds: -0.405,
+                }),
+                prob: 0.28,
+                n: 5,
+                n_pos: 1,
+                n_left: 2,
+                n_right: 3,
+            }),
+            right: Box::new(TreeNode::Leaf {
+                prob: 0.8,
+                n: 5,
+                n_pos: 4,
+                log_odds: 1.386,
+            }),
+            prob: 0.54,
+            n: 10,
+            n_pos: 5,
+            n_left: 5,
+            n_right: 5,
+        };
+        let x = vec![0.1, 0.5, 0.5]; // f0 -> left at root, left at child
+        let n_features = 3;
+        let got = exact_tree_shap_values(&tree, &x, n_features, false, 1.0);
+        let want = brute_force_shapley(&tree, &x, n_features);
+        for j in 0..n_features {
+            assert!(
+                (got[j] - want[j]).abs() < 1e-9,
+                "feature {}: TreeSHAP {} vs brute force {}",
+                j,
+                got[j],
+                want[j]
+            );
+        }
+        let f_x = tree.predict_prob(&x);
+        let base = tree.node_prob();
+        let sum_contrib: f64 = got.iter().sum();
+        assert!(
+            (base + sum_contrib - f_x).abs() < 1e-9,
+            "repeated-feature additivity violated: {} + {} vs {}",
+            base,
+            sum_contrib,
+            f_x
+        );
+    }
+
+    #[test]
+    fn treeshap_additivity_weighted_covers() {
+        let tree = make_tree();
+        let x = vec![0.2, 0.9, 0.7];
+        let n_features = 3;
+        let w = 3.0;
+        let got = exact_tree_shap_values(&tree, &x, n_features, true, w);
+        let f_x = tree.predict_prob(&x);
+        // Weighted background expectation at the root:
+        // E_w[f] = (c_l * v_l + c_r * v_r) / c_root with c = n_neg + w*n_pos.
+        fn e_w(node: &TreeNode, w: f64) -> f64 {
+            match node {
+                TreeNode::Leaf { prob, .. } => *prob,
+                TreeNode::Split {
+                    left, right, n, n_pos, ..
+                } => {
+                    let c_tot = (*n - *n_pos) as f64 + w * *n_pos as f64;
+                    if c_tot <= 0.0 {
+                        return node.node_prob();
+                    }
+                    (node_cover(left, true, w) * e_w(left, w)
+                        + node_cover(right, true, w) * e_w(right, w))
+                        / c_tot
+                }
+            }
+        }
+        let base = e_w(&tree, w);
+        let sum_contrib: f64 = got.iter().sum();
+        assert!(
+            (base + sum_contrib - f_x).abs() < 1e-9,
+            "weighted additivity violated: base {} + sum {} vs f(x) {}",
+            base,
+            sum_contrib,
+            f_x
+        );
+        let _ = pos_of;
+    }
+}
 

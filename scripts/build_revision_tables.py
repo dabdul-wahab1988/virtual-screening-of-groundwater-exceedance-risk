@@ -232,23 +232,23 @@ s4 = (s4_raw.groupby(["target_contaminant", "predictor_tier", "algorithm", "cv_m
       .sort_values(["target_contaminant", "predictor_tier", "algorithm", "cv_mode"]))
 save(s4, "TableS4_fold_level_metrics.csv")
 
-# ── TableS5: attribution base-probability stability (renamed) ───────────────
+# ── TableS5: SHAP base-probability stability ────────────────────────────────
 print("TableS5")
 s5_raw = q("""
   SELECT r.target_contaminant, r.predictor_tier, r.algorithm, b.cv_mode,
-         b.base_value_prob, b.train_fold_prevalence
-  FROM fold_attribution_base_values b JOIN model_runs r ON r.run_id = b.run_id
+         b.shap_base_value_prob, b.train_fold_prevalence
+  FROM fold_base_values b JOIN model_runs r ON r.run_id = b.run_id
   WHERE r.algorithm NOT LIKE 'Dummy%'
 """)
 s5 = (s5_raw.groupby(["target_contaminant", "predictor_tier", "algorithm", "cv_mode"])
-      .agg(n_folds=("base_value_prob", "size"),
-           base_prob_mean=("base_value_prob", "mean"),
-           base_prob_sd=("base_value_prob", "std"),
+      .agg(n_folds=("shap_base_value_prob", "size"),
+           base_prob_mean=("shap_base_value_prob", "mean"),
+           base_prob_sd=("shap_base_value_prob", "std"),
            train_prevalence_mean=("train_fold_prevalence", "mean"),
            train_prevalence_sd=("train_fold_prevalence", "std"))
       .round(4).reset_index()
       .sort_values(["target_contaminant", "predictor_tier", "algorithm", "cv_mode"]))
-save(s5, "TableS5_attribution_base_values.csv")
+save(s5, "TableS5_SHAP_base_values.csv")
 
 # ── TableS6: spatial clusters ───────────────────────────────────────────────
 print("TableS6")

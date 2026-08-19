@@ -33,7 +33,7 @@ pub fn export_r_files(conn: &Connection, out_dir: &str) -> Result<()> {
     export_fold_metrics_long(conn, out_dir)?;
     export_fold_composition(conn, out_dir)?;
     export_out_of_fold_predictions(conn, out_dir)?;
-    export_attributions_long(conn, out_dir)?;
+    export_shap_values_long(conn, out_dir)?;
     export_calibration_inputs(conn, out_dir)?;
     export_operational_thresholds(conn, out_dir)?;
     export_nested_operational_thresholds(conn, out_dir)?;
@@ -718,13 +718,13 @@ fn export_out_of_fold_predictions(conn: &Connection, out_dir: &str) -> Result<()
     Ok(())
 }
 
-fn export_attributions_long(conn: &Connection, out_dir: &str) -> Result<()> {
-    let path = format!("{}/feature_attributions_long.csv", out_dir);
+fn export_shap_values_long(conn: &Connection, out_dir: &str) -> Result<()> {
+    let path = format!("{}/shap_values_long.csv", out_dir);
     let mut stmt = conn.prepare(
         "SELECT s.run_id, s.sample_id, r.target_contaminant, r.predictor_tier, r.algorithm,
                 s.cv_mode, s.repeat_index, s.fold_index, s.feature_name,
-                s.attribution_value, s.feature_cleaned_value
-         FROM feature_attributions s
+                s.shap_value, s.feature_cleaned_value
+         FROM shap_values s
          JOIN model_runs r ON r.run_id = s.run_id
          ORDER BY r.target_contaminant, r.algorithm, s.sample_id, s.feature_name",
     )?;
@@ -760,7 +760,7 @@ fn export_attributions_long(conn: &Connection, out_dir: &str) -> Result<()> {
             "repeat_index",
             "fold_index",
             "feature_name",
-            "attribution_value",
+            "shap_value",
             "feature_cleaned_value",
         ],
         rows,

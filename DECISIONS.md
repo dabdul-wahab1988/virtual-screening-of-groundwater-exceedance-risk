@@ -33,17 +33,9 @@ distribution between 0 and the detection limit.
 
 ## 2026-08-19 — Revision round 2 (Track D)
 
-### Attribution terminology (revises the 2026-05-31 SHAP decision)
-**Decision:** The term "SHAP" is removed from every reader-facing artifact (manuscript,
-supplementary, tables, figures, exports, database schema, filenames). The implemented tree
-attributions are Saabas-style path-dependent contributions and are described as "path-based
-feature attribution"; they are NOT exact interventional TreeSHAP values. For linear models the
-attribution is now the exact additive logit decomposition phi_j = w_j * z_j with base = bias,
-which replaces the previous non-additive |w|-normalised approximation. Database tables renamed:
-`shap_values` -> `feature_attributions`, `fold_base_values` -> `fold_attribution_base_values`,
-column `mean_absolute_shap` -> `mean_absolute_attribution`.
-**Justification:** Reviewer 2/4 raised that Saabas values must never be labelled SHAP
-(R4-08); terminology must be accurate (Gate 5).
+### Attribution terminology and exact TreeSHAP (replaces the earlier SHAP decisions)
+**Decision (final):** Exact interventional TreeSHAP (Lundberg et al., 2018) is implemented natively for the tree models, with the training-fold data as the background distribution. Per-sample contributions use Shapley-weighted sums over subsets of the unique features on the sample's path (features off the path contribute zero); expected values marginalise non-fixed features over the background covers (node training counts, weighted by the positive-class weight for classification trees, so the decomposition is exactly additive on the fitted (weighted) tree values). Random forests are decomposed on the probability scale (base = mean of tree root probabilities); gradient-boosted trees on the log-odds scale (per-tree values scaled by the learning rate; base = initial log-odds + learning rate × sum of tree root means). Linear models use the exact linear SHAP decomposition (bias + Σ wⱼzⱼ on standardised features; the training background has zero mean, so it is exact). Database schema uses SHAP naming (`shap_values`, `fold_base_values`, `mean_absolute_shap`, `shap_value`, `shap_computation_time_ms`); exports use `shap_values_long.csv`; Figure 6 is `Figure6_SHAP_importance.png`. The implementation is unit-tested against brute-force Shapley enumeration (including repeated split features and class-weighted covers) and exact additivity.
+**Justification:** Reviewers 2/4 flagged that Saabas-style values must never be labelled SHAP (R2-07, R4-08; Gate 5). With max_depth ≤ 4 trees the exact algorithm is computationally trivial, so the scientifically stronger option (genuine SHAP) is taken instead of relabelling an approximation. The prior "exponential subset summation" concern applied to naive full Shapley enumeration over all features; the path-based TreeSHAP formulation with the off-path-weighting is polynomial and exact.
 
 ### Spatial clustering (revises the 2026-05-31 decision)
 **Decision:** The previous k-means variant (Haversine assignment distances with coordinate-mean
