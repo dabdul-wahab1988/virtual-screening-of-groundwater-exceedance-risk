@@ -451,7 +451,7 @@ fn build_tree(
 }
 
 /// Path-based feature attribution (Saabas method).
-fn path_shap(node: &TreeNode, x: &[f64], contrib: &mut Vec<f64>) {
+fn path_attribution(node: &TreeNode, x: &[f64], contrib: &mut Vec<f64>) {
     match node {
         TreeNode::Leaf { .. } => {}
         TreeNode::Split {
@@ -481,7 +481,7 @@ fn path_shap(node: &TreeNode, x: &[f64], contrib: &mut Vec<f64>) {
             let expected = (child_n * child_prob + other_n * other_prob) / total_n;
             let contribution = child_prob - expected;
             contrib[*feature_idx] += contribution;
-            path_shap(child, x, contrib);
+            path_attribution(child, x, contrib);
         }
     }
 }
@@ -662,7 +662,7 @@ impl Model for RandomForest {
                 let mut contrib = vec![0.0f64; n_feat];
                 for tree in &self.trees {
                     let mut c = vec![0.0f64; n_feat];
-                    path_shap(tree, xi, &mut c);
+                    path_attribution(tree, xi, &mut c);
                     contrib.iter_mut().zip(&c).for_each(|(a, &b)| *a += b);
                 }
                 let t = self.trees.len() as f64;
@@ -963,7 +963,7 @@ impl Model for GradientBoostedTrees {
                 let mut contrib = vec![0.0f64; n_feat];
                 for tree in &self.trees {
                     let mut c = vec![0.0f64; n_feat];
-                    path_shap(tree, xi, &mut c);
+                    path_attribution(tree, xi, &mut c);
                     contrib
                         .iter_mut()
                         .zip(&c)
@@ -1265,3 +1265,4 @@ pub fn fixed_model_inner_predictions(
 }
 
 // MetricBundle is used via crate::metrics::MetricBundle directly
+
