@@ -1,0 +1,340 @@
+{
+  "items": [
+    {
+      "comment_id": "R1-01",
+      "file": "Manuscript_Revised.docx",
+      "before_summary": "Unpolished English in places",
+      "after_summary": "Full native-English proofread and polish"
+    },
+    {
+      "comment_id": "R1-02",
+      "file": "Abstract",
+      "before_summary": "Abstract without numbers or recommendation",
+      "after_summary": "Numerical abstract with operational recommendation"
+    },
+    {
+      "comment_id": "R1-03",
+      "file": "Keywords",
+      "before_summary": "Keywords not alphabetical",
+      "after_summary": "Alphabetical keyword list"
+    },
+    {
+      "comment_id": "R1-04",
+      "file": "Section 1",
+      "before_summary": "Novelty implicit",
+      "after_summary": "Explicit novelty and knowledge-gap statements"
+    },
+    {
+      "comment_id": "R1-05",
+      "file": "Section 1",
+      "before_summary": "No recent water-quality refs in opening",
+      "after_summary": "Verified recent references added where relevant"
+    },
+    {
+      "comment_id": "R1-06",
+      "file": "References",
+      "before_summary": "Mixed-age reference list",
+      "after_summary": "Audited; foundational retained, recent added"
+    },
+    {
+      "comment_id": "R1-07",
+      "file": "Section 1",
+      "before_summary": "Knowledge gap undereferenced",
+      "after_summary": "Verified relevant refs cited"
+    },
+    {
+      "comment_id": "R1-08",
+      "file": "Response letter",
+      "before_summary": "\u2014",
+      "after_summary": "DOI verification documented; not adopted"
+    },
+    {
+      "comment_id": "R1-09",
+      "file": "Response letter",
+      "before_summary": "\u2014",
+      "after_summary": "DOI verification documented; off-topic"
+    },
+    {
+      "comment_id": "R1-10",
+      "file": "Response letter",
+      "before_summary": "\u2014",
+      "after_summary": "DOI verification documented; marginal"
+    },
+    {
+      "comment_id": "R1-11",
+      "file": "Response letter",
+      "before_summary": "\u2014",
+      "after_summary": "DOI verification documented; marginal"
+    },
+    {
+      "comment_id": "R1-12",
+      "file": "Response letter",
+      "before_summary": "\u2014",
+      "after_summary": "DOI verification documented; off-topic"
+    },
+    {
+      "comment_id": "R1-13",
+      "file": "Response letter",
+      "before_summary": "\u2014",
+      "after_summary": "DOI verification documented; marginal"
+    },
+    {
+      "comment_id": "R1-14",
+      "file": "Response letter",
+      "before_summary": "\u2014",
+      "after_summary": "DOI verification documented; off-topic"
+    },
+    {
+      "comment_id": "R1-15",
+      "file": "Response letter",
+      "before_summary": "\u2014",
+      "after_summary": "DOI verification documented; off-topic"
+    },
+    {
+      "comment_id": "R1-16",
+      "file": "Response letter",
+      "before_summary": "\u2014",
+      "after_summary": "DOI verification documented; off-topic"
+    },
+    {
+      "comment_id": "R1-17",
+      "file": "Response letter",
+      "before_summary": "\u2014",
+      "after_summary": "DOI verification documented; marginal"
+    },
+    {
+      "comment_id": "R2-01",
+      "file": "Abstract",
+      "before_summary": "No operational recommendation",
+      "after_summary": "Recommendation added"
+    },
+    {
+      "comment_id": "R2-02",
+      "file": "Sections 2.2, 4.6",
+      "before_summary": "Threshold status understated",
+      "after_summary": "Study-defined threshold status prominent; B corrected"
+    },
+    {
+      "comment_id": "R2-03",
+      "file": "Sections 2.3, 3.8",
+      "before_summary": "No coordinate test",
+      "after_summary": "Coordinate ablation reported"
+    },
+    {
+      "comment_id": "R2-04",
+      "file": "Sections 2.6, 4.4",
+      "before_summary": "Flow-path caveat absent",
+      "after_summary": "Caveat added"
+    },
+    {
+      "comment_id": "R2-05",
+      "file": "Sections 3.5, 4.3",
+      "before_summary": "k-spread understated",
+      "after_summary": "B/F k-ranges emphasised"
+    },
+    {
+      "comment_id": "R2-06",
+      "file": "Section 3.9",
+      "before_summary": "TDS-strict drivers unreported",
+      "after_summary": "Non-EC drivers reported"
+    },
+    {
+      "comment_id": "R2-07",
+      "file": "Sections 2.10, S10",
+      "before_summary": "SHAP wording; non-additive linear attribution",
+      "after_summary": "Path-based wording; exact additive linear attribution"
+    },
+    {
+      "comment_id": "R2-08",
+      "file": "Sections 3.7, 4.6",
+      "before_summary": "Calibration uncertainty undiscussed",
+      "after_summary": "Sources discussed"
+    },
+    {
+      "comment_id": "R2-09",
+      "file": "Section 4.5",
+      "before_summary": "No decision-support guidance",
+      "after_summary": "Guidance + flowchart added"
+    },
+    {
+      "comment_id": "R2-10",
+      "file": "Section 4.1",
+      "before_summary": "NO3 alternative undiscussed",
+      "after_summary": "Rule-based alternative discussed"
+    },
+    {
+      "comment_id": "R2-11",
+      "file": "Sections 2.5, 3.8",
+      "before_summary": "BDL untested",
+      "after_summary": "Substitution sensitivity reported"
+    },
+    {
+      "comment_id": "R2-12",
+      "file": "Section 4.4",
+      "before_summary": "No comparator benchmark",
+      "after_summary": "Cautious comparison added"
+    },
+    {
+      "comment_id": "R2-13",
+      "file": "Figure 8",
+      "before_summary": "No end-user flowchart",
+      "after_summary": "Flowchart added"
+    },
+    {
+      "comment_id": "R2-14",
+      "file": "Sections 2.9, 3.7",
+      "before_summary": "F2 without rationale",
+      "after_summary": "A priori rationale + beta sensitivity"
+    },
+    {
+      "comment_id": "R2-15",
+      "file": "Sections 2.8, 3.7",
+      "before_summary": "Pooled cutoffs only",
+      "after_summary": "Nested selection + comparison"
+    },
+    {
+      "comment_id": "R2-16",
+      "file": "Section 3.6",
+      "before_summary": "Na tier pattern unexplained",
+      "after_summary": "Small-sample interpretation added"
+    },
+    {
+      "comment_id": "R2-17",
+      "file": "Sections 2.10, 3.9",
+      "before_summary": "Priority bands undocumented; Very-high omitted",
+      "after_summary": "Bands documented; map corrected"
+    },
+    {
+      "comment_id": "R2-18",
+      "file": "Section 3.8",
+      "before_summary": "BDL geography unknown",
+      "after_summary": "Geography audited and reported"
+    },
+    {
+      "comment_id": "R2-19",
+      "file": "Section 3.1; FigS5",
+      "before_summary": "NO3 descriptive evidence missing",
+      "after_summary": "Statistics + map added"
+    },
+    {
+      "comment_id": "R2-20",
+      "file": "Sections 2.9, 3.7",
+      "before_summary": "Brier in isolation",
+      "after_summary": "Null baseline + skill score"
+    },
+    {
+      "comment_id": "R2-21",
+      "file": "Availability",
+      "before_summary": "DB status ambiguous",
+      "after_summary": "Explicit public-access statement"
+    },
+    {
+      "comment_id": "R2-22",
+      "file": "Section 4.7",
+      "before_summary": "Lumped-model idea unaddressed",
+      "after_summary": "Reasoned future-work position"
+    },
+    {
+      "comment_id": "R3-01",
+      "file": "Section 2.7",
+      "before_summary": "Self-citation in model sentence",
+      "after_summary": "Primary literature cited; software in availability"
+    },
+    {
+      "comment_id": "R3-06",
+      "file": "Whole manuscript",
+      "before_summary": "Acronyms undefined",
+      "after_summary": "All defined at first use"
+    },
+    {
+      "comment_id": "R3-07",
+      "file": "References",
+      "before_summary": "Citation doubt",
+      "after_summary": "Verified against published record"
+    },
+    {
+      "comment_id": "R3-08",
+      "file": "Whole manuscript",
+      "before_summary": "Figures/tables not embedded",
+      "after_summary": "All embedded with captions"
+    },
+    {
+      "comment_id": "R3-09",
+      "file": "Sections 2.1-2.10",
+      "before_summary": "Opacity items in supplement only",
+      "after_summary": "Moved into main text"
+    },
+    {
+      "comment_id": "R3-10",
+      "file": "Whole manuscript",
+      "before_summary": "Framing drift risk",
+      "after_summary": "Screening framing strengthened"
+    },
+    {
+      "comment_id": "R3-11",
+      "file": "Section 5",
+      "before_summary": "Conclusion exceeded evidence",
+      "after_summary": "Reweighted to evidence"
+    },
+    {
+      "comment_id": "R4-01",
+      "file": "Sections 2.2, 3.8",
+      "before_summary": "Threshold justification thin",
+      "after_summary": "Rationale + WHO sensitivity"
+    },
+    {
+      "comment_id": "R4-02",
+      "file": "Sections 2.7, 4.6",
+      "before_summary": "Overfitting risk unquantified",
+      "after_summary": "Small-sample audit + depth cap"
+    },
+    {
+      "comment_id": "R4-03",
+      "file": "Section 2.6",
+      "before_summary": "Clustering incoherent/undocumented",
+      "after_summary": "Projected k-means documented"
+    },
+    {
+      "comment_id": "R4-04",
+      "file": "Sections 2.6, 3.5",
+      "before_summary": "Single-class folds excluded",
+      "after_summary": "Transparency + pooled estimates"
+    },
+    {
+      "comment_id": "R4-05",
+      "file": "Sections 3.8, 4.2",
+      "before_summary": "Proxy discussion weak",
+      "after_summary": "Explicit EC-ablation discussion"
+    },
+    {
+      "comment_id": "R4-06",
+      "file": "Sections 2.8, 3.7",
+      "before_summary": "Pooled cutoffs only",
+      "after_summary": "Nested selection implemented"
+    },
+    {
+      "comment_id": "R4-07",
+      "file": "Section 1; letter",
+      "before_summary": "Literature update",
+      "after_summary": "Verified; relevant cited, others declined"
+    },
+    {
+      "comment_id": "R4-08",
+      "file": "Whole package",
+      "before_summary": "SHAP wording",
+      "after_summary": "Terminology corrected everywhere"
+    },
+    {
+      "comment_id": "R4-09",
+      "file": "Table 4",
+      "before_summary": "Instance counts misread as wells",
+      "after_summary": "Well-level unique-well counts"
+    },
+    {
+      "comment_id": "R4-10",
+      "file": "Sections 3, 4",
+      "before_summary": "Results/Discussion repetition",
+      "after_summary": "Restructured"
+    }
+  ]
+}

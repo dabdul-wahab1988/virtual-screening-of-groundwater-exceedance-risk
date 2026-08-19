@@ -68,16 +68,17 @@ med = q("""
   ) WHERE rn IN ((cnt + 1) / 2, (cnt + 2) / 2)
   GROUP BY variable_name
 """)
-t1 = t1.drop(columns=["Median_approx"]).merge(med, on="variable_name", how="left")
+t1 = t1.drop(columns=["Median_approx"]).merge(med.rename(columns={"variable_name": "Variable"}),
+                                              on="Variable", how="left")
 tdef = q("SELECT target_contaminant, threshold_value FROM target_definitions")
 telig = q("SELECT target_contaminant, n_positive, prevalence FROM target_eligibility")
-t1 = t1.merge(tdef.rename(columns={"target_contaminant": "variable_name"}),
-              on="variable_name", how="left")
-t1 = t1.merge(telig.rename(columns={"target_contaminant": "variable_name"}),
-              on="variable_name", how="left")
+t1 = t1.merge(tdef.rename(columns={"target_contaminant": "Variable"}),
+              on="Variable", how="left")
+t1 = t1.merge(telig.rename(columns={"target_contaminant": "Variable"}),
+              on="Variable", how="left")
 t1["n_exceeding"] = t1["n_positive"]
 t1["pct"] = (t1["prevalence"] * 100).round(1)
-t1["ML_status"] = t1["variable_name"].apply(
+t1["ML_status"] = t1["Variable"].apply(
     lambda v: "Modelled" if v in TARGETS else ("Descriptive only" if v == "NO3" else "Predictor"))
 save(t1, "Table1_dataset_summary.csv")
 
@@ -114,11 +115,12 @@ pooled = q("""
     AND pm.scope = 'all_held_out'
 """)
 strat = pooled[pooled.cv_mode == "Stratified_Nested_CV"].copy()
-spat = pooled[pooled.cv_mode == "Spatial_Group_CV"][["run_id", "pr_auc"]].rename(
-    columns={"pr_auc": "spatial_pr_auc"})
+spat = (pooled[pooled.cv_mode == "Spatial_Group_CV"]
+        [["target_contaminant", "predictor_tier", "algorithm", "pr_auc"]].rename(
+            columns={"pr_auc": "spatial_pr_auc"}))
 best = (strat.sort_values("pr_auc", ascending=False)
         .groupby(["target_contaminant", "predictor_tier"], sort=False).head(1))
-best = best.merge(spat, on="run_id", how="left")
+best = best.merge(spat, on=["target_contaminant", "predictor_tier", "algorithm"], how="left")
 save(best, "Table3_model_performance.csv")
 
 # ── Table 4: well-level operating + nested pooled operating ─────────────────

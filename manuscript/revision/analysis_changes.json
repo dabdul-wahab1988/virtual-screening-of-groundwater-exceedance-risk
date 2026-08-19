@@ -1,0 +1,89 @@
+{
+  "items": [
+    {
+      "comment_id": "R2-03",
+      "status": "PASS",
+      "description": "Coordinate-ablation variants for all tiers implemented and exported (TableS10, FigS4)."
+    },
+    {
+      "comment_id": "R2-06",
+      "status": "PASS",
+      "description": "EC-strict TDS attribution ranking exported; non-EC drivers reported."
+    },
+    {
+      "comment_id": "R2-07",
+      "status": "PASS",
+      "description": "SHAP terminology eliminated; exact additive linear attribution implemented (Gate 5)."
+    },
+    {
+      "comment_id": "R2-11",
+      "status": "PASS",
+      "description": "BDL substitution sensitivity for F completed (TableS12); labels invariant."
+    },
+    {
+      "comment_id": "R2-14",
+      "status": "PASS",
+      "description": "Beta sensitivity F1/F1.5/F2/F3 implemented (TableS13, FigS6)."
+    },
+    {
+      "comment_id": "R2-15",
+      "status": "PASS",
+      "description": "Fully nested operational-threshold selection implemented (TableS16, FigS7)."
+    },
+    {
+      "comment_id": "R2-18",
+      "status": "PASS",
+      "description": "F BDL well geography audited; substitution impact tested."
+    },
+    {
+      "comment_id": "R2-19",
+      "status": "PASS",
+      "description": "NO3 descriptive statistics and spatial distribution figure produced (FigS5)."
+    },
+    {
+      "comment_id": "R2-20",
+      "status": "PASS",
+      "description": "Brier null baseline and skill score computed per fold and pooled."
+    },
+    {
+      "comment_id": "R4-01",
+      "status": "PASS",
+      "description": "WHO-guideline relabelling analysis completed (TableS11)."
+    },
+    {
+      "comment_id": "R4-02",
+      "status": "PASS",
+      "description": "Small-sample diagnostics exported (TableS14); RF depth capped at 4."
+    },
+    {
+      "comment_id": "R4-03",
+      "status": "PASS",
+      "description": "Projected equirectangular Euclidean k-means implemented and documented."
+    },
+    {
+      "comment_id": "R4-04",
+      "status": "PASS",
+      "description": "Spatial fold transparency table (TableS15); pooled + binary-valid-only estimates."
+    },
+    {
+      "comment_id": "R4-05",
+      "status": "PASS",
+      "description": "EC ablation for Na and Cl completed (TableS10)."
+    },
+    {
+      "comment_id": "R4-06",
+      "status": "PASS",
+      "description": "Fully nested threshold selection implemented (same as R2-15)."
+    },
+    {
+      "comment_id": "R4-08",
+      "status": "PASS",
+      "description": "SHAP removed from schema, exports, figures, text; grep audit clean."
+    },
+    {
+      "comment_id": "R4-09",
+      "status": "PASS",
+      "description": "Well-level median OOF consolidation and unique-well TP/TN/FP/FN (Table 4)."
+    }
+  ]
+}

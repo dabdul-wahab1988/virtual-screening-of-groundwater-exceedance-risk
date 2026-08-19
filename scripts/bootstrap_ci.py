@@ -36,7 +36,10 @@ THRESH = 0.5
 def f_beta(precision, recall, beta):
     b2 = beta * beta
     denom = b2 * precision + recall
-    return np.where(denom > 0, (1.0 + b2) * precision * recall / denom, 0.0)
+    num = (1.0 + b2) * precision * recall
+    with np.errstate(divide="ignore", invalid="ignore"):
+        out = np.divide(num, denom, out=np.zeros_like(denom), where=denom > 0)
+    return out
 
 
 def metrics_for(y, p):
@@ -46,7 +49,7 @@ def metrics_for(y, p):
     if n_pos > 0 and n_neg > 0:
         out["pr_auc"] = average_precision_score(y, p)
         out["roc_auc"] = roc_auc_score(y, p)
-        out["recall"] = recall_score(y, p)
+        out["recall"] = recall_score(y, (p >= THRESH).astype(int))
         tp = np.sum((y == 1) & (p >= THRESH))
         tn = np.sum((y == 0) & (p < THRESH))
         fp = np.sum((y == 0) & (p >= THRESH))
@@ -90,17 +93,29 @@ def main():
         .index
     )
     headline = sel.loc[best_idx]
+    # The TDS EC-strict sensitivity model is a headline recommendation and is
+    # bootstrapped explicitly (it is excluded from the canonical filter above).
+    strict = pooled[
+        (pooled["cv_mode"] == "Stratified_Nested_CV")
+        & (pooled["scope"] == "all_held_out")
+        & (~pooled["algorithm"].str.startswith("Dummy"))
+        & (pooled["predictor_tier"] == "Tier2_Reduced_TDS_EC_strict")
+    ]
+    if not strict.empty:
+        strict_best = strict.sort_values("pr_auc", ascending=False).head(1)
+        headline = pd.concat([headline, strict_best], ignore_index=True)
     print(f"Headline selections: {len(headline)}")
 
     rng = np.random.default_rng(SEED)
     records = []
     for _, row in headline.iterrows():
         run_id = row["run_id"]
-        wm = well[(well["run_id"] == run_id) & well["median_probability"].notna()]
+        wm = well[(well["run_id"] == run_id) & well["median_probability"].notna()
+                  & well["true_label"].notna()]
         if len(wm) < 10:
             print(f"  skip {run_id}: {len(wm)} wells")
             continue
-        y_all = wm["true_label"].to_numpy(dtype=int)
+        y_all = wm["true_label"].astype(int).to_numpy(dtype=int)
         p_all = wm["median_probability"].to_numpy(dtype=float)
         idx_all = np.arange(len(wm))
 

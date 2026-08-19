@@ -110,7 +110,9 @@ def merge(canonical: str, partitions: list[str]) -> None:
                 )
             except sqlite3.OperationalError as e:
                 print(f"  WARN {table} from {part_path}: {e}")
+        main.commit()
         main.execute(f"DETACH DATABASE {alias}")
+        main.commit()
         print(f"merged {part_path}")
     main.execute("PRAGMA foreign_keys=ON")
     main.commit()

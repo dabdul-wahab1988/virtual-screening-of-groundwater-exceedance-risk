@@ -145,24 +145,35 @@ def run_jobs(jobs, label):
     return fails
 
 
+def done(cfg_name: str) -> bool:
+    """A phase is done when its canonical database exists."""
+    return (OUT / cfg_name / f"{cfg_name}.db").exists()
+
+
 def main():
     OUT.mkdir(parents=True, exist_ok=True)
     all_fails = []
 
     # 1) MAIN analysis (canonical thresholds, all tiers, all variants)
-    jobs = plan("main", "thresholds.yaml", TIERS_ALL, [])
-    all_fails += run_jobs(jobs, "MAIN")
-    if not all_fails:
-        merge_partitions("main", "thresholds.yaml", str(ROOT / "configs/config.yaml"))
-        print("merged main")
+    if done("main"):
+        print("MAIN already done — skipping")
+    else:
+        jobs = plan("main", "thresholds.yaml", TIERS_ALL, [])
+        all_fails += run_jobs(jobs, "MAIN")
+        if not all_fails:
+            merge_partitions("main", "thresholds.yaml", str(ROOT / "configs/config.yaml"))
+            print("merged main")
 
     # 2) WHO-guideline threshold sensitivity (no variants)
-    jobs = plan("who_guideline", "thresholds_who_guideline.yaml", TIERS_ALL, ["--no-variants"])
-    all_fails += run_jobs(jobs, "WHO_GUIDELINE")
-    if not all_fails:
-        merge_partitions("who_guideline", "thresholds_who_guideline.yaml",
-                         str(ROOT / "configs/config.yaml"))
-        print("merged who_guideline")
+    if done("who_guideline"):
+        print("WHO_GUIDELINE already done — skipping")
+    else:
+        jobs = plan("who_guideline", "thresholds_who_guideline.yaml", TIERS_ALL, ["--no-variants"])
+        all_fails += run_jobs(jobs, "WHO_GUIDELINE")
+        if not all_fails:
+            merge_partitions("who_guideline", "thresholds_who_guideline.yaml",
+                             str(ROOT / "configs/config.yaml"))
+            print("merged who_guideline")
 
     # 3) BDL substitution variants (Tier2+Tier3 only; Tier1 has no F predictor)
     bdl_variants = {
@@ -171,6 +182,9 @@ def main():
         "bdl_limit_direct": "thresholds_bdl_limit_direct.yaml",
     }
     for variant, yaml_name in bdl_variants.items():
+        if done(variant):
+            print(f"{variant} already done — skipping")
+            continue
         jobs = plan(variant, yaml_name, TIERS_NO_TIER1, ["--no-variants"])
         all_fails += run_jobs(jobs, f"BDL {variant}")
         if not all_fails:

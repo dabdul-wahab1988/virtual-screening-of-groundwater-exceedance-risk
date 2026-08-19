@@ -1,0 +1,21 @@
+artifact,number,title,location
+Figure,1,Workflow schematic,Section 2.10; Figure 1
+Figure,2,Exceedance prevalence,Section 3.1; Figure 2
+Figure,3,PR-AUC heatmap,Section 3.4; Figure 3
+Figure,4,Spatial validation penalty,Section 3.5; Figure 4
+Figure,5,Calibration curves,Section 3.7; Figure 5
+Figure,6,Path-based attribution importance,Section 3.9; Figure 6
+Figure,7,Screening-priority maps,Section 3.9; Figure 7
+Figure,8,End-user decision flowchart,Section 4.5; Figure 8
+Table,1,Dataset summary,Section 3.1; Table 1
+Table,2,Leakage-control matrix,Section 3.3; Table 2
+Table,3,Best classifiers (pooled OOF),Section 3.4; Table 3
+Table,4,Well-level operating characteristics,Section 3.7; Table 4
+Table,5,Tier comparison,Section 3.6; Table 5
+SuppFigure,S1,Correlation matrix,Supplementary
+SuppFigure,S2,Threshold-sensitivity curves,Supplementary
+SuppFigure,S3,Well-level confusion matrices,Supplementary
+SuppFigure,S4,Coordinate ablation,Supplementary
+SuppFigure,S5,NO3 descriptive,Supplementary
+SuppFigure,S6,Beta sensitivity,Supplementary
+SuppFigure,S7,Nested vs pooled cutoffs,Supplementary
