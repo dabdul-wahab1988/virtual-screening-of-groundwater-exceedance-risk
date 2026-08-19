@@ -103,12 +103,19 @@ pub struct ModelToggles {
     pub run_random_forest: bool,
     pub run_gradient_boosted_tree: bool,
     pub run_svm: bool,
+    /// Run coordinate-excluded sensitivity variants for every tier.
+    #[serde(default)]
+    pub run_coordinate_ablation: bool,
+    /// Targets for which an EC-excluded Tier-2 sensitivity variant is run.
+    #[serde(default)]
+    pub ec_ablation_targets: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct OutputSettings {
     pub write_fold_predictions: bool,
-    pub write_shap_values: bool,
+    #[serde(default)]
+    pub write_attributions: bool,
     pub write_gis_exports: bool,
 }
 

@@ -16,16 +16,22 @@ pub trait Model: Send {
     fn feature_importances(&self, n_features: usize) -> Vec<f64>;
     /// JSON string of selected hyperparameters.
     fn hyperparams_json(&self) -> String;
-    /// Whether tree-based path-SHAP is supported.
-    fn supports_tree_shap(&self) -> bool {
+    /// Whether tree-based path (Saabas-style) attribution is supported.
+    fn supports_tree_attribution(&self) -> bool {
         false
     }
     /// Compute per-sample path-based feature attributions (Saabas method).
-    fn tree_shap(&self, _x: &[Vec<f64>]) -> Vec<Vec<f64>> {
+    fn tree_attributions(&self, _x: &[Vec<f64>]) -> Vec<Vec<f64>> {
         vec![]
     }
-    /// Base value (mean training prediction in log-odds space).
-    fn shap_base_value(&self) -> f64 {
+    /// Raw linear coefficients (standardised-feature space), if the model is
+    /// linear. Length must equal n_features (zeros for unused features).
+    /// Used for the exact additive logit decomposition.
+    fn linear_weights(&self, _n_features: usize) -> Option<Vec<f64>> {
+        None
+    }
+    /// Base value (log-odds space) for the additive decomposition.
+    fn attribution_base_logit(&self) -> f64 {
         0.0
     }
 }
@@ -109,7 +115,6 @@ pub struct LogisticRegression {
     pub c: f64, // regularisation strength (1/lambda)
     max_iter: usize,
     lr: f64,
-    base_val: f64,
 }
 
 impl LogisticRegression {
@@ -120,7 +125,6 @@ impl LogisticRegression {
             c,
             max_iter: 1000,
             lr: 0.05,
-            base_val: 0.0,
         }
     }
 }
@@ -177,20 +181,6 @@ impl Model for LogisticRegression {
                 *weight -= self.lr * gradient;
             }
         }
-
-        // Store base value as mean prediction logit over training data
-        let mean_pred: f64 = x
-            .iter()
-            .map(|xi| {
-                sigmoid(self.bias + self.weights.iter().zip(xi).map(|(w, v)| w * v).sum::<f64>())
-            })
-            .sum::<f64>()
-            / n as f64;
-        self.base_val = if mean_pred > 0.0 && mean_pred < 1.0 {
-            (mean_pred / (1.0 - mean_pred)).ln()
-        } else {
-            0.0
-        };
     }
 
     fn predict_proba(&self, x: &[Vec<f64>]) -> Vec<f64> {
@@ -217,8 +207,12 @@ impl Model for LogisticRegression {
         format!("{{\"C\":{},\"max_iter\":{}}}", self.c, self.max_iter)
     }
 
-    fn shap_base_value(&self) -> f64 {
-        self.base_val
+    fn linear_weights(&self, _n_features: usize) -> Option<Vec<f64>> {
+        Some(self.weights.clone())
+    }
+
+    fn attribution_base_logit(&self) -> f64 {
+        self.bias
     }
 }
 
@@ -657,11 +651,11 @@ impl Model for RandomForest {
         )
     }
 
-    fn supports_tree_shap(&self) -> bool {
+    fn supports_tree_attribution(&self) -> bool {
         true
     }
 
-    fn tree_shap(&self, x: &[Vec<f64>]) -> Vec<Vec<f64>> {
+    fn tree_attributions(&self, x: &[Vec<f64>]) -> Vec<Vec<f64>> {
         let n_feat = self.n_features;
         x.iter()
             .map(|xi| {
@@ -678,7 +672,7 @@ impl Model for RandomForest {
             .collect()
     }
 
-    fn shap_base_value(&self) -> f64 {
+    fn attribution_base_logit(&self) -> f64 {
         self.base_val
     }
 }
@@ -958,11 +952,11 @@ impl Model for GradientBoostedTrees {
         )
     }
 
-    fn supports_tree_shap(&self) -> bool {
+    fn supports_tree_attribution(&self) -> bool {
         true
     }
 
-    fn tree_shap(&self, x: &[Vec<f64>]) -> Vec<Vec<f64>> {
+    fn tree_attributions(&self, x: &[Vec<f64>]) -> Vec<Vec<f64>> {
         let n_feat = self.n_features;
         x.iter()
             .map(|xi| {
@@ -980,7 +974,7 @@ impl Model for GradientBoostedTrees {
             .collect()
     }
 
-    fn shap_base_value(&self) -> f64 {
+    fn attribution_base_logit(&self) -> f64 {
         self.initial_log_odds
     }
 }
@@ -1040,6 +1034,24 @@ impl Model for EcOnlyLogistic {
             self.ec_feature_idx
         )
     }
+
+    fn linear_weights(&self, n_features: usize) -> Option<Vec<f64>> {
+        // Single coefficient on the EC feature, padded to the full feature set.
+        let inner_w = self.inner.linear_weights(n_features)?;
+        let mut w_full = vec![0.0; n_features];
+        if let Some(idx) = self.ec_feature_idx {
+            if idx < n_features {
+                if let Some(&w) = inner_w.first() {
+                    w_full[idx] = w;
+                }
+            }
+        }
+        Some(w_full)
+    }
+
+    fn attribution_base_logit(&self) -> f64 {
+        self.inner.attribution_base_logit()
+    }
 }
 
 // ── Hyperparameter grid search (inner CV) ─────────────────────────────────────
@@ -1047,21 +1059,52 @@ impl Model for EcOnlyLogistic {
 use crate::cv::{inner_cv_folds, subset_rows, subset_y};
 use crate::metrics::compute_pr_auc;
 
+/// Fit a model on each inner training fold and pool the validation-fold
+/// predictions (y_true, probability). These internal-validation predictions
+/// are used for the fully nested operational-cutoff selection so that the
+/// cutoff never touches outer held-out data.
+pub fn inner_cv_pooled_predictions(
+    x_train: &[Vec<f64>],
+    y_train: &[i32],
+    class_weight_pos: f64,
+    n_inner: usize,
+    seed: u64,
+    make_model: &mut dyn FnMut() -> Box<dyn Model>,
+) -> Vec<(i32, f64)> {
+    let folds = match inner_cv_folds(y_train, n_inner, seed) {
+        Ok(f) => f,
+        Err(_) => return vec![],
+    };
+    let mut pooled = Vec::new();
+    for fold in &folds {
+        let x_tr = subset_rows(x_train, &fold.train_idx);
+        let y_tr = subset_y(y_train, &fold.train_idx);
+        let x_val = subset_rows(x_train, &fold.test_idx);
+        let y_val = subset_y(y_train, &fold.test_idx);
+        let mut m = make_model();
+        m.fit(&x_tr, &y_tr, class_weight_pos, seed);
+        let proba = m.predict_proba(&x_val);
+        pooled.extend(y_val.iter().copied().zip(proba));
+    }
+    pooled
+}
+
 /// Tune regularised logistic regression C over a grid using inner CV.
+/// Returns (best C, pooled inner-validation predictions under best C).
 pub fn tune_logistic_c(
     x_train: &[Vec<f64>],
     y_train: &[i32],
     class_weight_pos: f64,
     n_inner: usize,
     seed: u64,
-) -> f64 {
+) -> (f64, Vec<(i32, f64)>) {
     let c_grid = [0.001, 0.01, 0.1, 0.5, 1.0, 5.0, 10.0, 50.0];
     let mut best_c = 1.0;
     let mut best_score = -1.0;
 
     let folds = match inner_cv_folds(y_train, n_inner, seed) {
         Ok(f) => f,
-        Err(_) => return 1.0,
+        Err(_) => return (1.0, vec![]),
     };
 
     for &c in &c_grid {
@@ -1084,24 +1127,37 @@ pub fn tune_logistic_c(
             best_c = c;
         }
     }
-    best_c
+
+    let pooled = inner_cv_pooled_predictions(
+        x_train,
+        y_train,
+        class_weight_pos,
+        n_inner,
+        seed,
+        &mut || Box::new(LogisticRegression::new(best_c)),
+    );
+    (best_c, pooled)
 }
 
 /// Tune random forest (n_estimators, max_depth) via inner CV.
+/// Returns (best params, pooled inner-validation predictions under best params).
 pub fn tune_random_forest(
     x_train: &[Vec<f64>],
     y_train: &[i32],
     class_weight_pos: f64,
     n_inner: usize,
     seed: u64,
-) -> (usize, usize) {
-    let grids: &[(usize, usize)] = &[(50, 3), (100, 4), (100, 5), (200, 4)];
+) -> ((usize, usize), Vec<(i32, f64)>) {
+    // Grid restricted to shallow trees (max_depth <= 4) for the small-sample
+    // setting: with ~65 training rows and up to 21 predictors, deeper trees
+    // are prone to overfitting and unstable fold-level behaviour.
+    let grids: &[(usize, usize)] = &[(50, 3), (100, 3), (100, 4), (200, 4)];
     let mut best = (100, 4);
     let mut best_score = -1.0;
 
     let folds = match inner_cv_folds(y_train, n_inner, seed) {
         Ok(f) => f,
-        Err(_) => return best,
+        Err(_) => return (best, vec![]),
     };
 
     for &(n_est, depth) in grids {
@@ -1124,24 +1180,35 @@ pub fn tune_random_forest(
             best = (n_est, depth);
         }
     }
-    best
+
+    let (n_est, depth) = best;
+    let pooled = inner_cv_pooled_predictions(
+        x_train,
+        y_train,
+        class_weight_pos,
+        n_inner,
+        seed,
+        &mut || Box::new(RandomForest::new(n_est, depth)),
+    );
+    (best, pooled)
 }
 
 /// Tune GBT (n_estimators, learning_rate) via inner CV.
+/// Returns (best params, pooled inner-validation predictions under best params).
 pub fn tune_gbt(
     x_train: &[Vec<f64>],
     y_train: &[i32],
     class_weight_pos: f64,
     n_inner: usize,
     seed: u64,
-) -> (usize, f64) {
+) -> ((usize, f64), Vec<(i32, f64)>) {
     let grids: &[(usize, f64)] = &[(50, 0.1), (100, 0.1), (100, 0.05), (50, 0.2)];
     let mut best = (100, 0.1);
     let mut best_score = -1.0;
 
     let folds = match inner_cv_folds(y_train, n_inner, seed) {
         Ok(f) => f,
-        Err(_) => return best,
+        Err(_) => return (best, vec![]),
     };
 
     for &(n_est, lr) in grids {
@@ -1164,7 +1231,37 @@ pub fn tune_gbt(
             best = (n_est, lr);
         }
     }
-    best
+
+    let (n_est, lr) = best;
+    let pooled = inner_cv_pooled_predictions(
+        x_train,
+        y_train,
+        class_weight_pos,
+        n_inner,
+        seed,
+        &mut || Box::new(GradientBoostedTrees::new(n_est, lr, 3)),
+    );
+    (best, pooled)
+}
+
+/// Pooled inner-validation predictions for a fixed-hyperparameter model
+/// (used for EC-only logistic regression, which is not tuned).
+pub fn fixed_model_inner_predictions(
+    x_train: &[Vec<f64>],
+    y_train: &[i32],
+    class_weight_pos: f64,
+    n_inner: usize,
+    seed: u64,
+    feature_names: &[String],
+) -> Vec<(i32, f64)> {
+    inner_cv_pooled_predictions(
+        x_train,
+        y_train,
+        class_weight_pos,
+        n_inner,
+        seed,
+        &mut || Box::new(EcOnlyLogistic::new(feature_names)),
+    )
 }
 
 // MetricBundle is used via crate::metrics::MetricBundle directly

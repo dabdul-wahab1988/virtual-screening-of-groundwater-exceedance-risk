@@ -10,6 +10,8 @@ pub struct MetricBundle {
     pub f1_score: f64,
     pub f2_score: f64,
     pub brier_score: f64,
+    pub brier_null: f64,
+    pub brier_skill: f64,
     pub calibration_slope: f64,
     pub calibration_intercept: f64,
     pub n_pos: usize,
@@ -57,6 +59,14 @@ pub fn compute_all_metrics(y_true: &[i32], y_prob: &[f64]) -> MetricBundle {
         0.0
     };
     let brier = compute_brier(y_true, y_prob);
+    // Null reference: prevalence-only prediction (probability = observed
+    // prevalence). Brier skill = 1 - Brier_model / Brier_null.
+    let brier_null = compute_brier_null(n_pos, n_neg);
+    let brier_skill = if brier_null > 1e-12 {
+        1.0 - brier / brier_null
+    } else {
+        0.0
+    };
     let (cal_slope, cal_intercept) = compute_calibration(y_true, y_prob);
 
     MetricBundle {
@@ -68,11 +78,24 @@ pub fn compute_all_metrics(y_true: &[i32], y_prob: &[f64]) -> MetricBundle {
         f1_score: f1,
         f2_score: f2,
         brier_score: brier,
+        brier_null,
+        brier_skill,
         calibration_slope: cal_slope,
         calibration_intercept: cal_intercept,
         n_pos,
         n_neg,
     }
+}
+
+/// Brier score of a prevalence-only (null) probability forecast:
+/// a constant prediction equal to the observed positive prevalence.
+pub fn compute_brier_null(n_pos: usize, n_neg: usize) -> f64 {
+    let n = (n_pos + n_neg) as f64;
+    if n == 0.0 {
+        return 0.25;
+    }
+    let p = n_pos as f64 / n;
+    p * (1.0 - p)
 }
 
 /// Area under the ROC curve (trapezoidal rule).
@@ -257,9 +280,21 @@ pub struct ThresholdPoint {
     pub specificity: f64,
     pub precision: f64,
     pub f1: f64,
+    pub f1_5: f64,
     pub f2: f64,
+    pub f3: f64,
     pub fn_count: usize,
     pub fp_count: usize,
+}
+
+/// F-beta score with the given beta (beta=1 -> F1, beta=2 -> F2).
+pub fn f_beta(precision: f64, recall: f64, beta: f64) -> f64 {
+    let b2 = beta * beta;
+    if b2 * precision + recall > 0.0 {
+        (1.0 + b2) * precision * recall / (b2 * precision + recall)
+    } else {
+        0.0
+    }
 }
 
 pub fn threshold_sweep(y_true: &[i32], y_prob: &[f64]) -> Vec<ThresholdPoint> {
@@ -286,23 +321,19 @@ pub fn threshold_sweep(y_true: &[i32], y_prob: &[f64]) -> Vec<ThresholdPoint> {
             } else {
                 0.0
             };
-            let f1 = if prec + sens > 0.0 {
-                2.0 * prec * sens / (prec + sens)
-            } else {
-                0.0
-            };
-            let f2 = if 4.0 * prec + sens > 0.0 {
-                5.0 * prec * sens / (4.0 * prec + sens)
-            } else {
-                0.0
-            };
+            let f1 = f_beta(prec, sens, 1.0);
+            let f1_5 = f_beta(prec, sens, 1.5);
+            let f2 = f_beta(prec, sens, 2.0);
+            let f3 = f_beta(prec, sens, 3.0);
             ThresholdPoint {
                 cutoff: cut,
                 sensitivity: sens,
                 specificity: spec,
                 precision: prec,
                 f1,
+                f1_5,
                 f2,
+                f3,
                 fn_count: fn_,
                 fp_count: fp,
             }

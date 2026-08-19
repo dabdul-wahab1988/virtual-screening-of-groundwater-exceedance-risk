@@ -28,3 +28,117 @@ have < 30% prevalence). ROC-AUC is less discriminating at extreme class ratios.
 **Justification:** Standard censored-data substitution following Helsel (2012). The exact BDL
 value is unknown; divide by sqrt(2) is the least-biased unbiased estimator for a uniform
 distribution between 0 and the detection limit.
+
+---
+
+## 2026-08-19 — Revision round 2 (Track D)
+
+### Attribution terminology (revises the 2026-05-31 SHAP decision)
+**Decision:** The term "SHAP" is removed from every reader-facing artifact (manuscript,
+supplementary, tables, figures, exports, database schema, filenames). The implemented tree
+attributions are Saabas-style path-dependent contributions and are described as "path-based
+feature attribution"; they are NOT exact interventional TreeSHAP values. For linear models the
+attribution is now the exact additive logit decomposition phi_j = w_j * z_j with base = bias,
+which replaces the previous non-additive |w|-normalised approximation. Database tables renamed:
+`shap_values` -> `feature_attributions`, `fold_base_values` -> `fold_attribution_base_values`,
+column `mean_absolute_shap` -> `mean_absolute_attribution`.
+**Justification:** Reviewer 2/4 raised that Saabas values must never be labelled SHAP
+(R4-08); terminology must be accurate (Gate 5).
+
+### Spatial clustering (revises the 2026-05-31 decision)
+**Decision:** The previous k-means variant (Haversine assignment distances with coordinate-mean
+centroids) is mathematically incoherent because the coordinate mean is not the least-squares
+centre under great-circle distance. Replaced with: (1) project (lon, lat) to a local
+equirectangular plane (kilometres) centred on the basin centroid; (2) ordinary Euclidean
+k-means with deterministic k-means++ initialisation; (3) inertia-elbow rule unchanged in spirit
+(marginal improvement < 10% of total range, capped at 8 clusters). Cluster metadata still report
+great-circle intra-cluster distances.
+**Justification:** R4-03; coherent least-squares clustering on a planar approximation whose
+error is negligible at < 100 km extent.
+
+### Fully nested operational-threshold selection
+**Decision:** Operational cutoffs are now selected inside each outer fold from inner-CV
+validation predictions only (sensitivity >= 0.90 rule, specificity maximised; fallback = best
+available sensitivity), frozen, and applied to the outer held-out test fold. Per-fold cutoffs
+and operating metrics are stored; a run-level pooled operating estimate (each fold's own cutoff
+applied to its test predictions) is stored; the old pooled post-hoc cutoffs are retained as a
+clearly labelled comparison analysis.
+**Justification:** R2-15, R4-06, instructions Phase 3A. Pooled cutoff selection leaks fold-level
+information into the operating estimate.
+
+### Spatial validation transparency
+**Decision:** Single-class spatial folds are never dropped and never abort a run. Every fold is
+stored with n, positives, negatives, status flag, and metric definability
+(`fold_composition`); pooled spatial metrics are computed across ALL unique held-out wells
+(`pooled_metrics`, scope 'all_held_out') and separately across binary-valid folds only
+(scope 'binary_valid_only') to quantify any exclusion bias.
+**Justification:** R4-04, instructions Phase 3B.
+
+### Well-level decision metrics
+**Decision:** The principal decision-support presentation uses well-level consolidated
+out-of-fold predictions: median OOF probability per well (pre-specified rule), each well
+contributing exactly once, with unique-well TP/TN/FP/FN at a well-level cutoff selected with
+the sensitivity >= 0.90 rule. Pooled prediction-instance counts (where a well can contribute
+multiple times across repeats) are retained only as explicitly labelled prediction-instance
+counts.
+**Justification:** R4-09, instructions Phase 3K (Gate 8).
+
+### Brier interpretation
+**Decision:** A prevalence-only null Brier score (constant prediction equal to the training
+prevalence) and Brier skill score = 1 - Brier_model / Brier_null are computed per fold and
+pooled, so Brier scores are never interpreted in isolation.
+**Justification:** R2-20, instructions Phase 3J.
+
+### F-beta sensitivity
+**Decision:** Threshold sweeps now compute F1, F1.5, F2 and F3; cutoff rules max_F1, max_F1_5,
+max_F2, max_F3 are all reported. F2 (beta = 2) is described as an a priori surveillance
+preference giving greater weight to recall, not an optimised cost ratio.
+**Justification:** R2-14, instructions Phase 3I.
+
+### Coordinate ablation
+**Decision:** For every tier, a "no_coords" sensitivity variant (coordinates excluded) is run
+for every target and CV mode to test whether explicit geographic information drives
+discrimination. Reported as sensitivity analysis, not as a new operational tier.
+**Justification:** R2-03, instructions Phase 3D.
+
+### EC ablation for Na and Cl
+**Decision:** Tier-2 EC-strict sensitivity variants are run for Na and Cl (EC excluded),
+mirroring the TDS EC-strict design, to distinguish field-proxy screening from richer
+hydrochemical signal.
+**Justification:** R4-05, instructions Phase 3M.
+
+### Small-sample diagnostics
+**Decision:** Fold-level train sizes and positive counts, sample-to-predictor ratios,
+feature counts and fold-level PR-AUC spread are exported
+(`small_sample_diagnostics.csv`, `fold_composition.csv`). The random-forest tuning grid was
+restricted to max_depth <= 4 (removed depth 5) for the small-sample setting.
+**Justification:** R4-02, instructions Phase 3F (Gate 7).
+
+### Screening-priority classes
+**Decision:** The pre-specified probability bands are retained and documented precisely:
+Low (< 0.25), Moderate (0.25–0.50), High (0.50–0.75), Very_High (>= 0.75), applied to the
+well-level median OOF probability of the best canonical run. Classes express screening
+priority for confirmatory testing, never definitive contamination status.
+**Justification:** R2-17, instructions Phase 3L (Gate 10).
+
+### Run identity
+**Decision:** run_id now includes the sensitivity-variant tag and the labelling variant
+(canonical = "main"); alternative-threshold and BDL-sensitivity analyses run in separate
+databases produced from alternative thresholds YAML files so canonical results are never
+overwritten.
+
+### BDL sensitivity
+**Decision:** Below-detection-limit substitution remains limit/sqrt(2) with the minimum
+detected value as the documented fallback limit (no laboratory LODs were supplied). The
+substitution method is now configurable ("limit_div_sqrt2" | "limit_div_2" | "limit_direct"),
+and a sensitivity analysis over reasonable F substitution values is run. A full censored
+maximum-likelihood model is not justified: only five F records are affected, all substituted
+values are far below the F screening threshold (1.125 mg/L), and target labels are invariant
+to the substitution (see REMAINING_LIMITATIONS).
+**Justification:** R2-11, R2-18, instructions Phase 3H.
+
+### EC-only logistic base value
+**Decision:** For linear models the attribution base value is the bias term, giving an exact
+additive decomposition of the logit. For tree ensembles the base value is the training
+prevalence logit (random forest) or initial log-odds (gradient boosting); the Saabas
+decomposition is approximate and documented as such.

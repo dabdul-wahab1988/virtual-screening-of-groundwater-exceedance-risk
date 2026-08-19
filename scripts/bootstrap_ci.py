@@ -1,15 +1,21 @@
-"""
-Bootstrap 95% CIs for PR-AUC, ROC-AUC, recall, F2, Brier, and calibration
-slope/intercept for the Table-3 headline classifiers, computed by
-resampling the existing out-of-fold predictions (no retraining).
+"""Well-level bootstrap confidence intervals for headline classifiers.
 
-Resampling unit is the well (sample_id): for each bootstrap draw we sample
-wells with replacement and, for each drawn well, randomly pick one of its
-available repeat-fold predictions (stratified nested CV repeats the same
-well across several outer folds). This respects that predictions for the
-same well across repeats are not independent while still propagating the
-finite-sample uncertainty a reviewer is asking about.
+Sampling unit: the WELL. Each bootstrap draw resamples wells with replacement
+and uses each well's consolidated median out-of-fold probability (one
+contribution per well), so repeated cross-validation predictions can never
+inflate apparent precision.
+
+Headline selections: for each (target, tier) the best canonical non-dummy
+algorithm by pooled OOF PR-AUC under stratified nested CV
+(reads outputs/rev2/main/r_exports/pooled_metrics.csv).
+
+Metrics per draw: PR-AUC, ROC-AUC, recall at 0.5, F1/F1.5/F2/F3 at 0.5,
+Brier, Brier skill vs the observed prevalence, calibration slope/intercept
+(logistic regression of the outcome on logit(p)).
+
+Output: outputs/rev2/main/r_exports/bootstrap_ci_summary.csv
 """
+
 import warnings
 warnings.filterwarnings("ignore")
 import numpy as np
@@ -17,128 +23,122 @@ import pandas as pd
 from sklearn.metrics import average_precision_score, roc_auc_score, recall_score, brier_score_loss
 from sklearn.linear_model import LogisticRegression
 
-RNG = np.random.default_rng(20260719)
+ROOT = r"C:\Users\ThinkPad P1 G4\Documents\Dr_Sukari_Manuscript\manuscript_4b\groundwater_virtual_screening"
+POOLED = ROOT + r"\outputs\rev2\main\r_exports\pooled_metrics.csv"
+WELL = ROOT + r"\outputs\rev2\main\r_exports\well_level_metrics.csv"
+OUT = ROOT + r"\outputs\rev2\main\r_exports\bootstrap_ci_summary.csv"
+
 N_BOOT = 2000
-
-PRED_PATH = "outputs/r_exports/out_of_fold_predictions.csv"
-
-# Table 3 headline selections (target, tier, algorithm) + the strict-TDS addition for Q1
-SELECTIONS = [
-    ("B", "Tier1_Field", "EcOnlyLogistic"),
-    ("B", "Tier2_Reduced", "LogisticRegression"),
-    ("B", "Tier3_Full", "LogisticRegression"),
-    ("Cl", "Tier1_Field", "EcOnlyLogistic"),
-    ("Cl", "Tier2_Reduced", "EcOnlyLogistic"),
-    ("Cl", "Tier3_Full", "EcOnlyLogistic"),
-    ("F", "Tier1_Field", "RandomForest"),
-    ("F", "Tier2_Reduced", "RandomForest"),
-    ("F", "Tier3_Full", "GradientBoostedTrees"),
-    ("Na", "Tier1_Field", "EcOnlyLogistic"),
-    ("Na", "Tier2_Reduced", "GradientBoostedTrees"),
-    ("Na", "Tier3_Full", "EcOnlyLogistic"),
-    ("TDS", "Tier1_Field", "EcOnlyLogistic"),
-    ("TDS", "Tier2_Reduced", "EcOnlyLogistic"),
-    ("TDS", "Tier3_Full", "EcOnlyLogistic"),
-    ("TDS", "Tier2_Reduced_TDS_EC_strict", "GradientBoostedTrees"),
-]
-
-CV_MODE = "Stratified_Nested_CV"
-F2_BETA2 = 4.0  # (1+2^2)
+SEED = 20260819
+THRESH = 0.5
 
 
-def f2_score(y_true, y_prob, thresh=0.5):
-    y_pred = (y_prob >= thresh).astype(int)
-    tp = np.sum((y_pred == 1) & (y_true == 1))
-    fp = np.sum((y_pred == 1) & (y_true == 0))
-    fn = np.sum((y_pred == 0) & (y_true == 1))
-    precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
-    recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
-    if precision + recall == 0:
-        return 0.0
-    return (1 + F2_BETA2) * precision * recall / (F2_BETA2 * precision + recall)
+def f_beta(precision, recall, beta):
+    b2 = beta * beta
+    denom = b2 * precision + recall
+    return np.where(denom > 0, (1.0 + b2) * precision * recall / denom, 0.0)
 
 
-def calibration_slope_intercept(y_true, y_prob):
-    eps = 1e-6
-    p = np.clip(y_prob, eps, 1 - eps)
-    logit = np.log(p / (1 - p))
-    if len(np.unique(y_true)) < 2:
-        return np.nan, np.nan
-    try:
-        lr = LogisticRegression(C=1e6, max_iter=1000)
-        lr.fit(logit.reshape(-1, 1), y_true)
-        return float(lr.coef_[0][0]), float(lr.intercept_[0])
-    except Exception:
-        return np.nan, np.nan
-
-
-def bootstrap_one(df, n_boot=N_BOOT):
-    wells = df["sample_id"].unique()
-    n_wells = len(wells)
-    by_well = {w: g[["true_label", "predicted_probability"]].to_numpy() for w, g in df.groupby("sample_id")}
-
-    metrics = {"pr_auc": [], "roc_auc": [], "recall": [], "f2": [], "brier": [], "cal_slope": [], "cal_intercept": []}
-
-    for _ in range(n_boot):
-        draw = RNG.choice(wells, size=n_wells, replace=True)
-        y_true, y_prob = [], []
-        for w in draw:
-            rows = by_well[w]
-            idx = RNG.integers(0, len(rows))
-            y_true.append(rows[idx, 0])
-            y_prob.append(rows[idx, 1])
-        y_true = np.array(y_true)
-        y_prob = np.array(y_prob)
-
-        if len(np.unique(y_true)) < 2:
-            continue
-
-        metrics["pr_auc"].append(average_precision_score(y_true, y_prob))
-        metrics["roc_auc"].append(roc_auc_score(y_true, y_prob))
-        metrics["recall"].append(recall_score(y_true, (y_prob >= 0.5).astype(int), zero_division=0))
-        metrics["f2"].append(f2_score(y_true, y_prob))
-        metrics["brier"].append(brier_score_loss(y_true, y_prob))
-        slope, intercept = calibration_slope_intercept(y_true, y_prob)
-        if not np.isnan(slope):
-            metrics["cal_slope"].append(slope)
-            metrics["cal_intercept"].append(intercept)
-
-    return metrics
-
-
-def summarize(vals):
-    arr = np.array(vals)
-    if len(arr) == 0:
-        return (np.nan, np.nan, np.nan)
-    return (np.median(arr), np.percentile(arr, 2.5), np.percentile(arr, 97.5))
+def metrics_for(y, p):
+    n_pos = int(y.sum())
+    n_neg = int(len(y) - n_pos)
+    out = {}
+    if n_pos > 0 and n_neg > 0:
+        out["pr_auc"] = average_precision_score(y, p)
+        out["roc_auc"] = roc_auc_score(y, p)
+        out["recall"] = recall_score(y, p)
+        tp = np.sum((y == 1) & (p >= THRESH))
+        tn = np.sum((y == 0) & (p < THRESH))
+        fp = np.sum((y == 0) & (p >= THRESH))
+        fn = np.sum((y == 1) & (p < THRESH))
+        prec = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+        out["precision"] = prec
+        out["f1"] = f_beta(prec, out["recall"], 1.0)
+        out["f1_5"] = f_beta(prec, out["recall"], 1.5)
+        out["f2"] = f_beta(prec, out["recall"], 2.0)
+        out["f3"] = f_beta(prec, out["recall"], 3.0)
+        out["brier"] = brier_score_loss(y, p)
+        prev = n_pos / len(y)
+        null_brier = prev * (1 - prev)
+        out["brier_skill"] = 1.0 - out["brier"] / null_brier if null_brier > 1e-12 else 0.0
+        lp = np.clip(np.log(p.clip(1e-6, 1 - 1e-6) / (1 - p.clip(1e-6, 1 - 1e-6))), -20, 20)
+        lr = LogisticRegression(max_iter=2000)
+        lr.fit(lp.reshape(-1, 1), y)
+        out["cal_slope"] = lr.coef_[0][0]
+        out["cal_intercept"] = lr.intercept_[0]
+    return out
 
 
 def main():
-    preds = pd.read_csv(PRED_PATH)
-    preds = preds[preds["cv_mode"] == CV_MODE]
+    pooled = pd.read_csv(POOLED)
+    well = pd.read_csv(WELL)
 
-    rows = []
-    for target, tier, algo in SELECTIONS:
-        sub = preds[(preds["target_contaminant"] == target) & (preds["predictor_tier"] == tier) & (preds["algorithm"] == algo)]
-        if sub.empty:
-            print(f"WARNING: no rows for {target}/{tier}/{algo}")
+    # Headline selections: best canonical non-dummy algorithm per (target, tier)
+    # under stratified nested CV by pooled OOF PR-AUC.
+    sel = pooled[
+        (pooled["cv_mode"] == "Stratified_Nested_CV")
+        & (pooled["scope"] == "all_held_out")
+        & (~pooled["algorithm"].str.startswith("Dummy"))
+        & (pooled["predictor_tier"].isin(["Tier1_Field", "Tier2_Reduced", "Tier3_Full"]))
+    ].copy()
+    # Exclude sensitivity variants (tier names with suffixes)
+    sel = sel[~sel["predictor_tier"].str.contains("no_coords|EC_strict|EC_inclusive")]
+    best_idx = (
+        sel.sort_values("pr_auc", ascending=False)
+        .groupby(["target_contaminant", "predictor_tier"], sort=False)
+        .head(1)
+        .index
+    )
+    headline = sel.loc[best_idx]
+    print(f"Headline selections: {len(headline)}")
+
+    rng = np.random.default_rng(SEED)
+    records = []
+    for _, row in headline.iterrows():
+        run_id = row["run_id"]
+        wm = well[(well["run_id"] == run_id) & well["median_probability"].notna()]
+        if len(wm) < 10:
+            print(f"  skip {run_id}: {len(wm)} wells")
             continue
-        n_pred_rows = len(sub)
-        n_wells = sub["sample_id"].nunique()
-        metrics = bootstrap_one(sub)
+        y_all = wm["true_label"].to_numpy(dtype=int)
+        p_all = wm["median_probability"].to_numpy(dtype=float)
+        idx_all = np.arange(len(wm))
 
-        row = {"target": target, "tier": tier, "algorithm": algo, "n_wells": n_wells, "n_pred_rows": n_pred_rows}
-        for m in ["pr_auc", "roc_auc", "recall", "f2", "brier", "cal_slope", "cal_intercept"]:
-            med, lo, hi = summarize(metrics[m])
-            row[f"{m}_median"] = round(med, 4) if not np.isnan(med) else np.nan
-            row[f"{m}_ci_lo"] = round(lo, 4) if not np.isnan(lo) else np.nan
-            row[f"{m}_ci_hi"] = round(hi, 4) if not np.isnan(hi) else np.nan
-        rows.append(row)
-        print(f"{target:4s} {tier:32s} {algo:20s}  PR-AUC {row['pr_auc_median']:.3f} [{row['pr_auc_ci_lo']:.3f}, {row['pr_auc_ci_hi']:.3f}]")
+        draws = {}
+        for _ in range(N_BOOT):
+            bi = rng.choice(idx_all, size=len(idx_all), replace=True)
+            y_b, p_b = y_all[bi], p_all[bi]
+            if y_b.sum() == 0 or (len(y_b) - y_b.sum()) == 0:
+                continue
+            m = metrics_for(y_b, p_b)
+            if not m:
+                continue
+            for k, v in m.items():
+                draws.setdefault(k, []).append(v)
+        if len(draws.get("pr_auc", [])) < 100:
+            print(f"  skip {run_id}: too few valid draws")
+            continue
 
-    out = pd.DataFrame(rows)
-    out.to_csv("outputs/r_exports/bootstrap_ci_summary.csv", index=False)
-    print("\nWritten: outputs/r_exports/bootstrap_ci_summary.csv")
+        rec = {
+            "target": row["target_contaminant"],
+            "tier": row["predictor_tier"],
+            "algorithm": row["algorithm"],
+            "n_wells": len(wm),
+        }
+        for k, vals in draws.items():
+            a = np.asarray(vals)
+            rec[f"{k}_median"] = float(np.median(a))
+            rec[f"{k}_ci_lo"] = float(np.percentile(a, 2.5))
+            rec[f"{k}_ci_hi"] = float(np.percentile(a, 97.5))
+        # Point estimates on the observed well-level sample
+        obs = metrics_for(y_all, p_all)
+        for k, v in obs.items():
+            rec[f"{k}_point"] = float(v)
+        records.append(rec)
+
+    summary = pd.DataFrame(records)
+    summary.to_csv(OUT, index=False)
+    print(f"Wrote {OUT} ({len(summary)} rows)")
 
 
 if __name__ == "__main__":

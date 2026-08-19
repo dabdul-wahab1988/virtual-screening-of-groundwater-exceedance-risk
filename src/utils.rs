@@ -87,18 +87,23 @@ pub fn percentile_sorted(sorted: &[f64], p: f64) -> f64 {
 /// Parse a value that may be "bdl", "nd", "<X", or a plain float.
 /// Returns (cleaned_value, is_bdl, is_parse_error)
 pub fn parse_numeric_bdl(raw: &str) -> (Option<f64>, bool, bool) {
-    let (value, is_bdl, is_parse_error, _) = parse_numeric_bdl_with_limit(raw, None);
+    let (value, is_bdl, is_parse_error, _) =
+        parse_numeric_bdl_with_limit(raw, None, "limit_div_sqrt2");
     (value, is_bdl, is_parse_error)
 }
 
 /// Parse a value that may be "bdl", "nd", "<X", or a plain float.
 ///
 /// Plain BDL markers are left-censored observations. If a positive finite
-/// substitution limit is provided, they are replaced by limit / sqrt(2);
+/// substitution limit is provided, they are replaced according to `method`:
+///   "limit_div_sqrt2" -> limit / sqrt(2)  (Helsel/Hornung & Reed convention)
+///   "limit_div_2"     -> limit / 2
+///   "limit_direct"    -> the limit itself
 /// otherwise they remain missing.
 pub fn parse_numeric_bdl_with_limit(
     raw: &str,
     substitution_limit: Option<f64>,
+    method: &str,
 ) -> (Option<f64>, bool, bool, Option<&'static str>) {
     let t = raw.trim();
     if t.is_empty() {
@@ -113,12 +118,12 @@ pub fn parse_numeric_bdl_with_limit(
         || t == "-"
     {
         if let Some(limit) = substitution_limit.filter(|v| v.is_finite() && *v > 0.0) {
-            return (
-                Some(limit / 2.0_f64.sqrt()),
-                true,
-                false,
-                Some("substituted_as_limit_div_sqrt2"),
-            );
+            let substituted = match method {
+                "limit_direct" => limit,
+                "limit_div_2" => limit / 2.0,
+                _ => limit / 2.0_f64.sqrt(),
+            };
+            return (Some(substituted), true, false, Some("substituted_as_limit_div_sqrt2"));
         }
         return (None, true, false, Some("bdl_stored_as_missing_no_limit"));
     }

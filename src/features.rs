@@ -101,6 +101,20 @@ pub fn store_column_dictionary(conn: &Connection, metas: &[ColumnMeta]) -> Resul
 
 // ── Tier candidate lists ─────────────────────────────────────────────────────
 
+/// Returns the candidate feature names for a given tier (before leakage
+/// filtering), applying variant-specific candidate modifications:
+/// - "no_coords": coordinates (Dx, Dy) are removed (coordinate-ablation
+///   sensitivity design).
+pub fn tier_candidate_features_variant(tier: &str, variant: Option<&str>) -> Vec<String> {
+    let mut candidates = tier_candidate_features(tier);
+    if let Some(v) = variant {
+        if v.contains("no_coords") {
+            candidates.retain(|f| f != "Dx" && f != "Dy");
+        }
+    }
+    candidates
+}
+
 /// Returns the candidate feature names for a given tier (before leakage filtering).
 pub fn tier_candidate_features(tier: &str) -> Vec<String> {
     match tier {
@@ -337,7 +351,7 @@ pub fn get_filtered_features(
     rules: &LeakageRulesConfig,
     special_variant: Option<&str>,
 ) -> Result<Vec<String>> {
-    let candidates = tier_candidate_features(tier);
+    let candidates = tier_candidate_features_variant(tier, special_variant);
     let (included, _excluded) = apply_leakage_filter(
         &candidates,
         target,

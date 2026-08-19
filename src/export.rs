@@ -31,12 +31,18 @@ pub fn export_r_files(conn: &Connection, out_dir: &str) -> Result<()> {
     export_leakage_audit_summary(conn, out_dir)?;
     export_model_performance_summary(conn, out_dir)?;
     export_fold_metrics_long(conn, out_dir)?;
+    export_fold_composition(conn, out_dir)?;
     export_out_of_fold_predictions(conn, out_dir)?;
-    export_shap_values_long(conn, out_dir)?;
+    export_attributions_long(conn, out_dir)?;
     export_calibration_inputs(conn, out_dir)?;
     export_operational_thresholds(conn, out_dir)?;
+    export_nested_operational_thresholds(conn, out_dir)?;
     export_threshold_sensitivity(conn, out_dir)?;
+    export_pooled_metrics(conn, out_dir)?;
+    export_well_level_metrics(conn, out_dir)?;
+    export_well_level_operating(conn, out_dir)?;
     export_screening_priority_table(conn, out_dir)?;
+    export_small_sample_diagnostics(conn, out_dir)?;
 
     log::info!("R exports written to {}", out_dir);
     Ok(())
@@ -203,6 +209,7 @@ fn export_fold_metrics_long(conn: &Connection, out_dir: &str) -> Result<()> {
         "SELECT r.run_id, r.target_contaminant, r.predictor_tier, r.algorithm, r.cv_mode,
                 m.repeat_index, m.fold_index, m.roc_auc, m.pr_auc, m.balanced_accuracy,
                 m.recall_sensitivity, m.specificity, m.f1_score, m.f2_score, m.brier_score,
+                m.brier_null, m.brier_skill,
                 m.calibration_slope, m.calibration_intercept, m.n_test_pos, m.n_test_neg
          FROM fold_metrics m
          JOIN model_runs r ON r.run_id = m.run_id
@@ -229,10 +236,12 @@ fn export_fold_metrics_long(conn: &Connection, out_dir: &str) -> Result<()> {
                 fmt(row.get(14)),
                 fmt(row.get(15)),
                 fmt(row.get(16)),
-                row.get::<_, Option<i64>>(17)?
+                fmt(row.get(17)),
+                fmt(row.get(18)),
+                row.get::<_, Option<i64>>(19)?
                     .map(|v| v.to_string())
                     .unwrap_or_default(),
-                row.get::<_, Option<i64>>(18)?
+                row.get::<_, Option<i64>>(20)?
                     .map(|v| v.to_string())
                     .unwrap_or_default(),
             ])
@@ -257,10 +266,398 @@ fn export_fold_metrics_long(conn: &Connection, out_dir: &str) -> Result<()> {
             "f1_score",
             "f2_score",
             "brier_score",
+            "brier_null",
+            "brier_skill",
             "calibration_slope",
             "calibration_intercept",
             "n_test_pos",
             "n_test_neg",
+        ],
+        rows,
+    )?;
+    Ok(())
+}
+
+fn export_fold_composition(conn: &Connection, out_dir: &str) -> Result<()> {
+    let path = format!("{}/fold_composition.csv", out_dir);
+    let mut stmt = conn.prepare(
+        "SELECT r.run_id, r.target_contaminant, r.predictor_tier, r.algorithm,
+                fc.cv_mode, fc.repeat_index, fc.fold_index, fc.fold_status,
+                fc.metrics_defined, fc.n_train, fc.n_train_pos, fc.n_train_neg,
+                fc.n_test, fc.n_test_pos, fc.n_test_neg, fc.member_cluster_ids
+         FROM fold_composition fc
+         JOIN model_runs r ON r.run_id = fc.run_id
+         ORDER BY r.target_contaminant, r.algorithm, fc.cv_mode, fc.repeat_index, fc.fold_index",
+    )?;
+    let rows: Vec<Vec<String>> = stmt
+        .query_map([], |row| {
+            Ok(vec![
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, i64>(5)?.to_string(),
+                row.get::<_, i64>(6)?.to_string(),
+                row.get::<_, String>(7)?,
+                row.get::<_, i64>(8)?.to_string(),
+                row.get::<_, i64>(9)?.to_string(),
+                row.get::<_, i64>(10)?.to_string(),
+                row.get::<_, i64>(11)?.to_string(),
+                row.get::<_, i64>(12)?.to_string(),
+                row.get::<_, i64>(13)?.to_string(),
+                row.get::<_, i64>(14)?.to_string(),
+                row.get::<_, Option<String>>(15)?.unwrap_or_default(),
+            ])
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+
+    write_csv_file(
+        &path,
+        &[
+            "run_id",
+            "target_contaminant",
+            "predictor_tier",
+            "algorithm",
+            "cv_mode",
+            "repeat_index",
+            "fold_index",
+            "fold_status",
+            "metrics_defined",
+            "n_train",
+            "n_train_pos",
+            "n_train_neg",
+            "n_test",
+            "n_test_pos",
+            "n_test_neg",
+            "member_cluster_ids",
+        ],
+        rows,
+    )?;
+    Ok(())
+}
+
+fn export_nested_operational_thresholds(conn: &Connection, out_dir: &str) -> Result<()> {
+    let path = format!("{}/nested_operational_thresholds.csv", out_dir);
+    let mut stmt = conn.prepare(
+        "SELECT nt.run_id, r.target_contaminant, r.predictor_tier, r.algorithm, nt.cv_mode,
+                nt.repeat_index, nt.fold_index, nt.threshold_selection_rule,
+                nt.cutoff_selection_source, nt.optimized_probability_cutoff,
+                nt.sensitivity, nt.specificity, nt.precision,
+                nt.f1_score, nt.f1_5_score, nt.f2_score, nt.f3_score,
+                nt.false_negatives_count, nt.false_positives_count,
+                nt.n_test_pos, nt.n_test_neg
+         FROM nested_operational_thresholds nt
+         JOIN model_runs r ON r.run_id = nt.run_id
+         ORDER BY r.target_contaminant, r.algorithm, nt.cv_mode, nt.repeat_index, nt.fold_index",
+    )?;
+    let rows: Vec<Vec<String>> = stmt
+        .query_map([], |row| {
+            let fmt = |v: rusqlite::Result<f64>| format!("{:.4}", v.unwrap_or(f64::NAN));
+            Ok(vec![
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, i64>(5)?.to_string(),
+                row.get::<_, i64>(6)?.to_string(),
+                row.get::<_, String>(7)?,
+                row.get::<_, String>(8)?,
+                fmt(row.get(9)),
+                fmt(row.get(10)),
+                fmt(row.get(11)),
+                fmt(row.get(12)),
+                fmt(row.get(13)),
+                fmt(row.get(14)),
+                fmt(row.get(15)),
+                fmt(row.get(16)),
+                row.get::<_, i64>(17)?.to_string(),
+                row.get::<_, i64>(18)?.to_string(),
+                row.get::<_, i64>(19)?.to_string(),
+                row.get::<_, i64>(20)?.to_string(),
+            ])
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+
+    write_csv_file(
+        &path,
+        &[
+            "run_id",
+            "target_contaminant",
+            "predictor_tier",
+            "algorithm",
+            "cv_mode",
+            "repeat_index",
+            "fold_index",
+            "threshold_selection_rule",
+            "cutoff_selection_source",
+            "optimized_probability_cutoff",
+            "sensitivity",
+            "specificity",
+            "precision",
+            "f1_score",
+            "f1_5_score",
+            "f2_score",
+            "f3_score",
+            "false_negatives_count",
+            "false_positives_count",
+            "n_test_pos",
+            "n_test_neg",
+        ],
+        rows,
+    )?;
+    Ok(())
+}
+
+fn export_pooled_metrics(conn: &Connection, out_dir: &str) -> Result<()> {
+    let path = format!("{}/pooled_metrics.csv", out_dir);
+    let mut stmt = conn.prepare(
+        "SELECT r.run_id, r.target_contaminant, r.predictor_tier, r.algorithm, pm.cv_mode, pm.scope,
+                pm.n_wells, pm.n_pos, pm.n_neg, pm.roc_auc, pm.pr_auc, pm.recall,
+                pm.specificity, pm.f1_score, pm.f2_score, pm.balanced_accuracy,
+                pm.brier_score, pm.brier_null, pm.brier_skill
+         FROM pooled_metrics pm
+         JOIN model_runs r ON r.run_id = pm.run_id
+         ORDER BY r.target_contaminant, r.algorithm, pm.cv_mode, pm.scope",
+    )?;
+    let rows: Vec<Vec<String>> = stmt
+        .query_map([], |row| {
+            let fmt = |v: rusqlite::Result<f64>| format!("{:.6}", v.unwrap_or(f64::NAN));
+            Ok(vec![
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, String>(5)?,
+                row.get::<_, i64>(6)?.to_string(),
+                row.get::<_, i64>(7)?.to_string(),
+                row.get::<_, i64>(8)?.to_string(),
+                fmt(row.get(9)),
+                fmt(row.get(10)),
+                fmt(row.get(11)),
+                fmt(row.get(12)),
+                fmt(row.get(13)),
+                fmt(row.get(14)),
+                fmt(row.get(15)),
+                fmt(row.get(16)),
+                fmt(row.get(17)),
+                fmt(row.get(18)),
+            ])
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+
+    write_csv_file(
+        &path,
+        &[
+            "run_id",
+            "target_contaminant",
+            "predictor_tier",
+            "algorithm",
+            "cv_mode",
+            "scope",
+            "n_wells",
+            "n_pos",
+            "n_neg",
+            "roc_auc",
+            "pr_auc",
+            "recall",
+            "specificity",
+            "f1_score",
+            "f2_score",
+            "balanced_accuracy",
+            "brier_score",
+            "brier_null",
+            "brier_skill",
+        ],
+        rows,
+    )?;
+    Ok(())
+}
+
+fn export_well_level_metrics(conn: &Connection, out_dir: &str) -> Result<()> {
+    let path = format!("{}/well_level_metrics.csv", out_dir);
+    let mut stmt = conn.prepare(
+        "SELECT w.run_id, r.target_contaminant, r.predictor_tier, r.algorithm, w.cv_mode,
+                w.sample_id, w.true_label, w.n_predictions, w.median_probability,
+                w.mean_probability, w.lower_ci, w.upper_ci
+         FROM well_level_metrics w
+         JOIN model_runs r ON r.run_id = w.run_id
+         ORDER BY r.target_contaminant, r.algorithm, w.sample_id",
+    )?;
+    let rows: Vec<Vec<String>> = stmt
+        .query_map([], |row| {
+            let fmt = |v: rusqlite::Result<f64>| format!("{:.6}", v.unwrap_or(f64::NAN));
+            Ok(vec![
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, String>(5)?,
+                row.get::<_, Option<i64>>(6)?
+                    .map(|v| v.to_string())
+                    .unwrap_or_default(),
+                row.get::<_, i64>(7)?.to_string(),
+                fmt(row.get(8)),
+                fmt(row.get(9)),
+                fmt(row.get(10)),
+                fmt(row.get(11)),
+            ])
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+
+    write_csv_file(
+        &path,
+        &[
+            "run_id",
+            "target_contaminant",
+            "predictor_tier",
+            "algorithm",
+            "cv_mode",
+            "sample_id",
+            "true_label",
+            "n_predictions",
+            "median_probability",
+            "mean_probability",
+            "lower_ci",
+            "upper_ci",
+        ],
+        rows,
+    )?;
+    Ok(())
+}
+
+fn export_well_level_operating(conn: &Connection, out_dir: &str) -> Result<()> {
+    let path = format!("{}/well_level_operating.csv", out_dir);
+    let mut stmt = conn.prepare(
+        "SELECT w.run_id, r.target_contaminant, r.predictor_tier, r.algorithm, w.cv_mode,
+                w.threshold_selection_rule, w.cutoff_source, w.optimized_probability_cutoff,
+                w.tp_count, w.tn_count, w.fp_count, w.fn_count,
+                w.sensitivity, w.specificity, w.precision, w.f2_score,
+                w.n_wells, w.n_pos_wells, w.n_neg_wells
+         FROM well_level_operating w
+         JOIN model_runs r ON r.run_id = w.run_id
+         ORDER BY r.target_contaminant, r.algorithm, w.cv_mode",
+    )?;
+    let rows: Vec<Vec<String>> = stmt
+        .query_map([], |row| {
+            let fmt = |v: rusqlite::Result<f64>| format!("{:.4}", v.unwrap_or(f64::NAN));
+            Ok(vec![
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, String>(5)?,
+                row.get::<_, String>(6)?,
+                fmt(row.get(7)),
+                row.get::<_, i64>(8)?.to_string(),
+                row.get::<_, i64>(9)?.to_string(),
+                row.get::<_, i64>(10)?.to_string(),
+                row.get::<_, i64>(11)?.to_string(),
+                fmt(row.get(12)),
+                fmt(row.get(13)),
+                fmt(row.get(14)),
+                fmt(row.get(15)),
+                row.get::<_, i64>(16)?.to_string(),
+                row.get::<_, i64>(17)?.to_string(),
+                row.get::<_, i64>(18)?.to_string(),
+            ])
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+
+    write_csv_file(
+        &path,
+        &[
+            "run_id",
+            "target_contaminant",
+            "predictor_tier",
+            "algorithm",
+            "cv_mode",
+            "threshold_selection_rule",
+            "cutoff_source",
+            "optimized_probability_cutoff",
+            "tp_count",
+            "tn_count",
+            "fp_count",
+            "fn_count",
+            "sensitivity",
+            "specificity",
+            "precision",
+            "f2_score",
+            "n_wells",
+            "n_pos_wells",
+            "n_neg_wells",
+        ],
+        rows,
+    )?;
+    Ok(())
+}
+
+fn export_small_sample_diagnostics(conn: &Connection, out_dir: &str) -> Result<()> {
+    let path = format!("{}/small_sample_diagnostics.csv", out_dir);
+    let mut stmt = conn.prepare(
+        "SELECT r.target_contaminant, r.predictor_tier, r.algorithm, r.cv_mode,
+                r.n_features, COUNT(*) AS n_folds,
+                ROUND(AVG(fc.n_train),1) AS mean_train_n,
+                MIN(fc.n_train_pos) AS min_train_pos,
+                ROUND(AVG(fc.n_train_pos),1) AS mean_train_pos,
+                MAX(fc.n_train_pos) AS max_train_pos,
+                ROUND(MIN(fc.n_train_pos * 1.0 / r.n_features),2) AS min_pos_per_feature,
+                ROUND(AVG(fc.n_train * 1.0 / r.n_features),2) AS mean_train_per_feature,
+                ROUND(MIN(m.pr_auc),4) AS min_pr_auc,
+                ROUND(AVG(m.pr_auc),4) AS mean_pr_auc,
+                ROUND(MAX(m.pr_auc),4) AS max_pr_auc
+         FROM model_runs r
+         JOIN fold_composition fc ON fc.run_id = r.run_id
+         JOIN fold_metrics m ON m.run_id = r.run_id
+         WHERE r.algorithm NOT IN ('DummyMajority','DummyStratified')
+         GROUP BY r.target_contaminant, r.predictor_tier, r.algorithm, r.cv_mode, r.n_features
+         ORDER BY r.target_contaminant, r.predictor_tier, r.algorithm, r.cv_mode",
+    )?;
+    let rows: Vec<Vec<String>> = stmt
+        .query_map([], |row| {
+            let fmt = |v: rusqlite::Result<f64>| format!("{:.4}", v.unwrap_or(f64::NAN));
+            Ok(vec![
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, i64>(4)?.to_string(),
+                row.get::<_, i64>(5)?.to_string(),
+                fmt(row.get(6)),
+                row.get::<_, i64>(7)?.to_string(),
+                fmt(row.get(8)),
+                row.get::<_, i64>(9)?.to_string(),
+                fmt(row.get(10)),
+                fmt(row.get(11)),
+                fmt(row.get(12)),
+                fmt(row.get(13)),
+                fmt(row.get(14)),
+            ])
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+
+    write_csv_file(
+        &path,
+        &[
+            "target_contaminant",
+            "predictor_tier",
+            "algorithm",
+            "cv_mode",
+            "n_features",
+            "n_folds",
+            "mean_train_n",
+            "min_train_pos",
+            "mean_train_pos",
+            "max_train_pos",
+            "min_pos_per_feature",
+            "mean_train_per_feature",
+            "min_pr_auc",
+            "mean_pr_auc",
+            "max_pr_auc",
         ],
         rows,
     )?;
@@ -321,13 +718,13 @@ fn export_out_of_fold_predictions(conn: &Connection, out_dir: &str) -> Result<()
     Ok(())
 }
 
-fn export_shap_values_long(conn: &Connection, out_dir: &str) -> Result<()> {
-    let path = format!("{}/shap_values_long.csv", out_dir);
+fn export_attributions_long(conn: &Connection, out_dir: &str) -> Result<()> {
+    let path = format!("{}/feature_attributions_long.csv", out_dir);
     let mut stmt = conn.prepare(
         "SELECT s.run_id, s.sample_id, r.target_contaminant, r.predictor_tier, r.algorithm,
                 s.cv_mode, s.repeat_index, s.fold_index, s.feature_name,
-                s.shap_value, s.feature_cleaned_value
-         FROM shap_values s
+                s.attribution_value, s.feature_cleaned_value
+         FROM feature_attributions s
          JOIN model_runs r ON r.run_id = s.run_id
          ORDER BY r.target_contaminant, r.algorithm, s.sample_id, s.feature_name",
     )?;
@@ -363,7 +760,7 @@ fn export_shap_values_long(conn: &Connection, out_dir: &str) -> Result<()> {
             "repeat_index",
             "fold_index",
             "feature_name",
-            "shap_value",
+            "attribution_value",
             "feature_cleaned_value",
         ],
         rows,
@@ -464,7 +861,7 @@ fn export_threshold_sensitivity(conn: &Connection, out_dir: &str) -> Result<()> 
     let mut stmt = conn.prepare(
         "SELECT ts.run_id, r.target_contaminant, r.algorithm, ts.cv_mode,
                 ts.probability_cutoff, ts.sensitivity, ts.specificity,
-                ts.precision, ts.f1_score, ts.f2_score,
+                ts.precision, ts.f1_score, ts.f1_5_score, ts.f2_score, ts.f3_score,
                 ts.false_negatives_count, ts.false_positives_count
          FROM threshold_sensitivity ts
          JOIN model_runs r ON r.run_id = ts.run_id
@@ -484,8 +881,10 @@ fn export_threshold_sensitivity(conn: &Connection, out_dir: &str) -> Result<()> 
                 fmt(row.get(7)),
                 fmt(row.get(8)),
                 fmt(row.get(9)),
-                row.get::<_, i64>(10)?.to_string(),
-                row.get::<_, i64>(11)?.to_string(),
+                fmt(row.get(10)),
+                fmt(row.get(11)),
+                row.get::<_, i64>(12)?.to_string(),
+                row.get::<_, i64>(13)?.to_string(),
             ])
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -502,7 +901,9 @@ fn export_threshold_sensitivity(conn: &Connection, out_dir: &str) -> Result<()> 
             "specificity",
             "precision",
             "f1_score",
+            "f1_5_score",
             "f2_score",
+            "f3_score",
             "false_negatives_count",
             "false_positives_count",
         ],
