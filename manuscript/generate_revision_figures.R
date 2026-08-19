@@ -86,7 +86,7 @@ box_df <- data.frame(
     "Projected\nk-means spatial\nclusters (k = 4)\n(equirectangular)",
     "Repeated nested CV\n(5 repeats x 5 folds)\n+ inner CV tuning",
     "Spatial-group CV\n(3 held-out blocks)\n+ pooled evaluation",
-    "Path-based feature\nattribution\n(Saabas-style)",
+    "Exact interventional\nTreeSHAP values\n(Lundberg et al., 2018)",
     "Well-level median\nOOF probabilities\n+ screening-priority\nclasses"
   ),
   stringsAsFactors = FALSE
