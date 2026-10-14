@@ -221,7 +221,7 @@ The scripts under `manuscript/` and `scripts/` consume the generated SQLite data
 
 If you use this software, please cite:
 
-> Abdul-Wahab, D. & Sunkari, E. D. (2026). *Virtual screening of groundwater exceedance risk* (Version 0.1.0) [Computer software]. Zenodo. [https://doi.org/10.5281/zenodo.21442254](https://doi.org/10.5281/zenodo.21442254)
+> Abdul-Wahab, D. & Sunkari, E. D. (2026). *Virtual screening of groundwater exceedance risk* (Version 0.1.1) [Computer software]. Zenodo. [https://doi.org/10.5281/zenodo.21442254](https://doi.org/10.5281/zenodo.21442254)
 
 ## License
 

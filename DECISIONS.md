@@ -164,3 +164,6 @@ model over an explicit background data set. All code comments, documentation, th
 and the response letter now say "exact path-dependent (cover-weighted) TreeSHAP". Values are genuine Shapley
 values of that value function (verified against brute-force enumeration in the unit tests) and are not
 Saabas-style path contributions.
+
+### 2026-10-14 — Release label set to 0.1.1
+The software release carrying the revision is labelled **0.1.1** (Cargo package, `gvs --version`, `configs/config.yaml` project version, README citation). The archived databases were generated while the labels read 0.1.0 (software) and 0.2.0 (config project version); their `project_manifest` rows were relabelled to 0.1.1 afterwards. Only that metadata changed; no result was recomputed. The `config_hash` stored in `model_runs` therefore differs from the hash of the current `config.yaml` by this version line only.

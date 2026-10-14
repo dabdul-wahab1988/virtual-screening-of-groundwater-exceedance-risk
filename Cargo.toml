@@ -1,6 +1,6 @@
 [package]
 name = "groundwater_virtual_screening"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "Leakage-controlled virtual screening of groundwater quality exceedance — Pru Basin, Ghana"
 authors = ["Dr. Sukari Research Group"]

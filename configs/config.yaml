@@ -1,6 +1,6 @@
 project:
   name: "groundwater_virtual_screening_pru"
-  version: "0.2.0"
+  version: "0.1.1"
 
 paths:
   input_csv:           "data/raw/pru.csv"
