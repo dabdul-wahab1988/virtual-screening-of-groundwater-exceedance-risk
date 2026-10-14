@@ -319,7 +319,7 @@ CREATE TABLE IF NOT EXISTS fold_feature_tracking (
     selection_reason   TEXT
 );
 
--- Exact interventional TreeSHAP values (Lundberg et al., 2018), computed with
+-- Exact path-dependent (cover-weighted) TreeSHAP values (Lundberg et al., 2018), computed with
 -- the training-fold data as the background distribution.
 CREATE TABLE IF NOT EXISTS shap_values (
     shap_id              INTEGER PRIMARY KEY AUTOINCREMENT,

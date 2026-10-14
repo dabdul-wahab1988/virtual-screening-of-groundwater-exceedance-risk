@@ -13,7 +13,8 @@ paths:
 
 cv:
   outer_folds:                    5
-  spatial_outer_folds:            3
+  # null = leave-one-cluster-out: every spatial cluster is held out once.
+  spatial_outer_folds:            null
   inner_folds:                    3
   repeats:                        5
   random_seed:                    20260531

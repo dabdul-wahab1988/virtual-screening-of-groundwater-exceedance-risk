@@ -16,11 +16,11 @@ pub trait Model: Send {
     fn feature_importances(&self, n_features: usize) -> Vec<f64>;
     /// JSON string of selected hyperparameters.
     fn hyperparams_json(&self) -> String;
-    /// Whether tree-based exact interventional TreeSHAP is supported.
+    /// Whether tree-based exact path-dependent (cover-weighted) TreeSHAP is supported.
     fn supports_tree_attribution(&self) -> bool {
         false
     }
-    /// Compute per-sample exact interventional TreeSHAP values (Lundberg et
+    /// Compute per-sample exact path-dependent (cover-weighted) TreeSHAP values (Lundberg et
     /// al., 2018) with the training-fold data as the background distribution.
     /// `class_weight` is the positive-class weight used at fit time (needed
     /// for the weighted background covers of classification trees).
@@ -286,18 +286,20 @@ impl TreeNode {
     }
 }
 
-// ── Exact interventional TreeSHAP (Lundberg et al., 2018) ────────────────────
+// ── Exact path-dependent (cover-weighted) TreeSHAP (Lundberg et al., 2018) ────────────────────
 //
-// Exact Shapley values for a single tree with the training-fold data as the
-// background distribution. For a path P of split features along the sample's
+// Exact Shapley values of the tree's cover-weighted (path-dependent)
+// conditional expectation. There is NO explicit background data set: features
+// that are not fixed are marginalised by following each branch in proportion
+// to its training covers, which is the tree_path_dependent value function, not
+// the interventional one. For a path P of split features along the sample's
 // route, features off the path contribute zero, and the contribution of path
 // feature j is
 //   phi_j = sum_{T subset P \ {j}} W(|T|) * [v(T u {j}) - v(T)]
 // with W(t) = sum_{k=0}^{M-|P|} C(M-|P|, k) * (t+k)! (M-t-k-1)! / M!,
 // where M is the total number of features and v(T) is the expected node value
 // when the features in T are fixed to the sample's values and the rest are
-// marginalised over the background. Background covers are the node sample
-// counts (weighted by the positive-class weight for classification trees, so
+// marginalised with the covers. Covers are the node sample counts (weighted by the positive-class weight for classification trees, so
 // that the decomposition is exactly additive: sum_j phi_j = f(x) - E[f]).
 //
 // Complexity is O(2^|P| * depth) per sample per tree; with max_depth <= 4 this
@@ -362,7 +364,7 @@ fn tree_shap_expectation(
     }
 }
 
-/// Exact interventional TreeSHAP values for one tree and one sample.
+/// Exact path-dependent (cover-weighted) TreeSHAP values for one tree and one sample.
 fn exact_tree_shap_values(
     tree: &TreeNode,
     x: &[f64],
@@ -1445,7 +1447,7 @@ mod tests {
         }
     }
 
-    /// Brute-force Shapley values with the same interventional background
+    /// Brute-force Shapley values with the same cover-weighted (path-dependent) value function
     /// definition: features fixed to the sample's values follow the sample's
     /// branch; the rest take the cover-weighted average of the children.
     fn brute_force_shapley(tree: &TreeNode, x: &[f64], n_features: usize) -> Vec<f64> {

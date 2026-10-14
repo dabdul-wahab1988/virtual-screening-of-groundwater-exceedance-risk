@@ -48,7 +48,7 @@ Three predictor tiers represent increasing analytical effort:
 | `Tier2_Reduced` | Reduced laboratory panel | Tier 1 plus major ions |
 | `Tier3_Full` | Full chemistry panel | Tier 2 plus additional analytes and derived ionic ratios |
 
-Before a model is fitted, [`configs/leakage_rules.yaml`](configs/leakage_rules.yaml) removes the target, target-derived variables, label-like fields, and other prohibited predictors. TDS additionally has EC-inclusive and EC-strict sensitivity variants.
+Before a model is fitted, [`configs/leakage_rules.yaml`](configs/leakage_rules.yaml) removes the target, target-derived variables, label-like fields, and other prohibited predictors. TDS additionally has EC-inclusive and EC-strict sensitivity variants. EC is a legitimate predictor for TDS only as an identity: in this dataset TDS ≈ 0.9 × EC (median TDS/EC ratio 0.900, n = 81 in `data/raw/pru.csv`), so the EC-inclusive TDS result largely reflects that identity and the EC-strict variant is the check against EC-proxy circularity.
 
 The pipeline evaluates majority and stratified baselines, EC-only logistic regression, regularised logistic regression, random forest, and gradient-boosted trees. Model implementations are native Rust and deterministic under the configured seed.
 
@@ -195,13 +195,15 @@ For a new study, copy the configuration files, document every threshold source, 
 - PR-AUC is the inner-CV tuning criterion because exceedances are imbalanced.
 - Both discrimination and calibration metrics are exported.
 - Spatial CV estimates geographic-transfer performance and should not be conflated with randomly stratified CV.
-- Tree explanations are exact interventional TreeSHAP values (Lundberg et al., 2018) computed with the training-fold data as the background distribution; linear-model explanations are exact SHAP values (Lundberg & Lee, 2017). The decomposition is exactly additive (base value + sum of SHAP values = model output). See [`DECISIONS.md`](DECISIONS.md) for this and other implementation choices.
-- Operational probability cutoffs are selected inside each outer fold from inner-CV validation predictions only (fully nested threshold selection), frozen, and applied to the held-out test fold; the pooled post-hoc cutoffs are retained as a labelled comparison.
+- Tree explanations are exact path-dependent (cover-weighted) TreeSHAP values (Lundberg et al., 2018). The background distribution is the training fold for gradient-boosted trees and, for random forests, the bootstrap covers (node training counts of each tree's bootstrap sample). Random-forest values are on the probability scale (base value = mean of tree root probabilities); gradient-boosted values are on the log-odds scale. Linear-model explanations are exact SHAP values (Lundberg & Lee, 2017) on the log-odds scale. Each decomposition is exactly additive (base value + sum of SHAP values = model output). See [`DECISIONS.md`](DECISIONS.md) for this and other implementation choices.
+- Operational probability cutoffs are selected inside each outer fold from inner-CV validation predictions only (fully nested threshold selection), frozen, and applied to the held-out test fold; the pooled post-hoc cutoffs are retained as a labelled comparison. `nested_operational_thresholds.cutoff_selection_source` is `inner_cv_validation` normally and `training_in_sample_fallback` when inner CV could not be formed (flagged).
+- Spatial validation is leave-one-cluster-out: each projected k-means cluster is held out once (`spatial_outer_folds: null` in `configs/config.yaml`). The earlier round-robin merge of clusters into three folds is superseded.
+- Fold metrics that are mathematically undefined for a single-class held-out fold (ROC-AUC, PR-AUC, balanced accuracy, calibration; recall without positives; specificity without negatives; F-scores without positives) are stored as NULL in `fold_metrics`, not as sentinel values. SQL `AVG` ignores NULLs, so fold averages cover only defined folds; check the fold count before interpreting them.
 - Spatial folds containing a single outcome class are retained and flagged (`fold_composition`); pooled spatial metrics are computed across all unique held-out wells (`pooled_metrics`, scope `all_held_out`) and separately across binary-valid folds only.
 - The principal decision-support presentation uses well-level consolidated out-of-fold predictions (median probability per well; each well contributes once) with unique-well TP/TN/FP/FN counts.
 - Screening priority is based on the best completed canonical non-dummy run, using pre-specified probability bands (Low < 0.25, Moderate 0.25-0.50, High 0.50-0.75, Very_High >= 0.75).
 - Spatial clusters are built by Euclidean k-means (k-means++ init, deterministic seed) on coordinates projected to a local equirectangular plane (km); great-circle distances are used only for reporting intra-cluster distances.
-- Brier scores are always accompanied by a prevalence-only null Brier and Brier skill score.
+- Brier scores are always accompanied by a prevalence-only null Brier and Brier skill score. For each held-out fold, the null is the prevalence of that fold's outer-training data.
 
 To verify the Rust code locally:
 

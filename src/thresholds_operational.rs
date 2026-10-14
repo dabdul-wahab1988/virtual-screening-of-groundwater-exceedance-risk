@@ -183,6 +183,7 @@ pub fn store_nested_threshold(
     repeat: usize,
     fold: usize,
     rule: &str,
+    cutoff_source: &str,
     cutoff: f64,
     y_test: &[i32],
     p_test: &[f64],
@@ -216,7 +217,7 @@ pub fn store_nested_threshold(
           cutoff_selection_source, optimized_probability_cutoff,
           sensitivity, specificity, precision, f1_score, f1_5_score, f2_score, f3_score,
           false_negatives_count, false_positives_count, n_test_pos, n_test_neg)
-         VALUES (?1, ?2, ?3, ?4, ?5, 'inner_cv_validation', ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+         VALUES (?1, ?2, ?3, ?4, ?5, ?18, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
         rusqlite::params![
             run_id,
             cv_mode,
@@ -235,6 +236,7 @@ pub fn store_nested_threshold(
             fp_ as i64,
             n_pos as i64,
             n_neg as i64,
+            cutoff_source,
         ],
     )?;
     Ok(())

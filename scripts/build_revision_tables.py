@@ -41,9 +41,9 @@ t1 = q("""
          SUM(CASE WHEN c.cleaned_value_real IS NOT NULL AND c.missing_flag = 0 THEN 1 ELSE 0 END) AS n_valid,
          SUM(c.bdl_flag) AS n_BDL,
          SUM(c.missing_flag) AS n_missing,
-         ROUND(MIN(c.cleaned_value_real), 3) AS Min,
+         ROUND(MIN(CASE WHEN c.bdl_flag = 0 THEN c.cleaned_value_real END), 3) AS Min,
          ROUND(AVG(c.cleaned_value_real), 3) AS Median_approx,
-         ROUND(MAX(c.cleaned_value_real), 3) AS Max
+         ROUND(MAX(CASE WHEN c.bdl_flag = 0 THEN c.cleaned_value_real END), 3) AS Max
   FROM cleaned_measurements c
   LEFT JOIN column_dictionary cd ON cd.column_name = c.variable_name
   WHERE c.variable_name IN ('Dx','Dy','pH','Temp.','EC','TDS','Na','K','Mg','Ca','Cl',
@@ -68,8 +68,23 @@ med = q("""
   ) WHERE rn IN ((cnt + 1) / 2, (cnt + 2) / 2)
   GROUP BY variable_name
 """)
+# Median of DETECTED values only (BDL substitutions excluded), so the reported
+# median is a measured concentration; n_valid includes BDL substitutions.
+med_det = q("""
+  SELECT variable_name, ROUND(MIN(median_val), 3) AS Median_detected FROM (
+    SELECT variable_name,
+           cleaned_value_real AS median_val,
+           ROW_NUMBER() OVER (PARTITION BY variable_name ORDER BY cleaned_value_real) AS rn,
+           COUNT(*) OVER (PARTITION BY variable_name) AS cnt
+    FROM cleaned_measurements
+    WHERE cleaned_value_real IS NOT NULL AND missing_flag = 0 AND bdl_flag = 0
+  ) WHERE rn IN ((cnt + 1) / 2, (cnt + 2) / 2)
+  GROUP BY variable_name
+""")
 t1 = t1.drop(columns=["Median_approx"]).merge(med.rename(columns={"variable_name": "Variable"}),
                                               on="Variable", how="left")
+t1 = t1.merge(med_det.rename(columns={"variable_name": "Variable"}), on="Variable", how="left")
+t1["n_detected"] = t1["n_valid"] - t1["n_BDL"]
 tdef = q("SELECT target_contaminant, threshold_value FROM target_definitions")
 telig = q("SELECT target_contaminant, n_positive, prevalence FROM target_eligibility")
 t1 = t1.merge(tdef.rename(columns={"target_contaminant": "Variable"}),
@@ -111,59 +126,86 @@ pooled = q("""
          pm.balanced_accuracy, pm.brier_skill, pm.n_pos, pm.n_neg
   FROM pooled_metrics pm JOIN model_runs mr ON pm.run_id = mr.run_id
   WHERE mr.run_status = 'completed' AND mr.algorithm NOT LIKE 'Dummy%'
-    AND mr.predictor_tier IN ('Tier1_Field','Tier2_Reduced','Tier3_Full')
+    AND (mr.predictor_tier IN ('Tier1_Field','Tier2_Reduced','Tier3_Full')
+         OR mr.predictor_tier LIKE '%_EC_strict')
     AND pm.scope = 'all_held_out'
 """)
 strat = pooled[pooled.cv_mode == "Stratified_Nested_CV"].copy()
 spat = (pooled[pooled.cv_mode == "Spatial_Group_CV"]
         [["target_contaminant", "predictor_tier", "algorithm", "pr_auc"]].rename(
             columns={"pr_auc": "spatial_pr_auc"}))
-best = (strat.sort_values("pr_auc", ascending=False)
-        .groupby(["target_contaminant", "predictor_tier"], sort=False).head(1))
-best = best.merge(spat, on=["target_contaminant", "predictor_tier", "algorithm"], how="left")
+# Tier-specific best model: chosen among the multivariable models (logistic
+# regression, random forest, gradient-boosted trees). The EC-only logistic
+# baseline uses only EC, so it is identical at every tier; it is reported as
+# its own reference row ('EC_only_baseline') rather than as the "best model"
+# of a tier it does not use.
+multi = strat[strat.algorithm != "EcOnlyLogistic"]
+best_multi = (multi.sort_values("pr_auc", ascending=False)
+              .groupby(["target_contaminant", "predictor_tier"], sort=False).head(1))
+base = strat[(strat.algorithm == "EcOnlyLogistic") & (strat.predictor_tier == "Tier1_Field")].copy()
+base["predictor_tier"] = "EC_only_baseline"
+best = pd.concat([base, best_multi], ignore_index=True)
+spat_all = spat.copy()
+spat_base = spat_all[(spat_all.algorithm == "EcOnlyLogistic")
+                     & (spat_all.predictor_tier == "Tier1_Field")].copy()
+spat_base["predictor_tier"] = "EC_only_baseline"
+spat_all = pd.concat([spat_all, spat_base], ignore_index=True)
+best = best.merge(spat_all, on=["target_contaminant", "predictor_tier", "algorithm"], how="left")
+TIER_ORDER = {"EC_only_baseline": 0, "Tier1_Field": 1, "Tier2_Reduced": 2,
+              "Tier2_Reduced_Na_EC_strict": 3, "Tier2_Reduced_Cl_EC_strict": 3,
+              "Tier2_Reduced_TDS_EC_strict": 3, "Tier3_Full": 4}
+TGT_ORDER = {"Na": 0, "Cl": 1, "TDS": 2, "B": 3, "F": 4}
+best["_o"] = best.target_contaminant.map(TGT_ORDER) * 10 + best.predictor_tier.map(TIER_ORDER)
+best = best.sort_values("_o").drop(columns="_o").reset_index(drop=True)
+# Pooled calibration slope and intercept (logistic regression of the outcome on
+# logit of the out-of-fold probability, Newton/L-BFGS fit; the fold-level values
+# stored by the pipeline come from a fixed-step gradient descent that does not
+# converge on near-separable models and are therefore not reported).
+def _calibration(run_id):
+    import numpy as np
+    from sklearn.linear_model import LogisticRegression
+    d = pd.read_sql_query(
+        "SELECT true_label AS y, predicted_probability AS p FROM well_predictions WHERE run_id = ?",
+        con, params=(run_id,)).dropna()
+    if d["y"].nunique() < 2:
+        return (np.nan, np.nan)
+    z = np.log(np.clip(d["p"], 1e-3, 1 - 1e-3) / (1 - np.clip(d["p"], 1e-3, 1 - 1e-3)))
+    m = LogisticRegression(penalty=None, max_iter=2000).fit(z.to_numpy().reshape(-1, 1), d["y"].astype(int))
+    return (float(m.coef_[0][0]), float(m.intercept_[0]))
+
+
+cal = best["run_id"].map(_calibration)
+best["cal_slope"] = [c[0] for c in cal]
+best["cal_intercept"] = [c[1] for c in cal]
 save(best, "Table3_model_performance.csv")
 
-# ── Table 4: well-level operating + nested pooled operating ─────────────────
+# ── Table 4: principal decision table = FULLY NESTED, unique-well ──────────
+# Each well is flagged if its held-out prediction exceeded the frozen,
+# inner-CV-selected cutoff of its own outer fold in a strict majority of the
+# repeats (scripts/nested_well_level.py). Post-hoc well-level counts (cutoff
+# chosen on all 81 wells' median OOF probabilities) are kept only as a
+# clearly labelled comparison.
 print("Table 4")
+import subprocess, sys
+nested_all = os.path.join(OUT, "Table4_nested_well_level_all_runs.csv")
+subprocess.run([sys.executable, os.path.join(ROOT, "scripts", "nested_well_level.py"),
+                "--db", DB, "--out", nested_all], check=True)
+nw = pd.read_csv(nested_all)
 wlo = q("""
-  SELECT w.run_id, mr.target_contaminant, mr.predictor_tier, mr.algorithm,
-         w.optimized_probability_cutoff, w.tp_count, w.tn_count, w.fp_count, w.fn_count,
-         w.sensitivity, w.specificity, w.precision, w.f2_score, w.n_wells,
-         w.n_pos_wells, w.n_neg_wells
+  SELECT w.run_id, w.optimized_probability_cutoff AS posthoc_cutoff,
+         w.tp_count AS posthoc_tp, w.tn_count AS posthoc_tn,
+         w.fp_count AS posthoc_fp, w.fn_count AS posthoc_fn,
+         w.sensitivity AS posthoc_sensitivity, w.specificity AS posthoc_specificity
   FROM well_level_operating w JOIN model_runs mr ON w.run_id = mr.run_id
   WHERE mr.cv_mode = 'Stratified_Nested_CV' AND mr.algorithm NOT LIKE 'Dummy%'
+    AND w.threshold_selection_rule = 'sens_ge_0.90'
 """)
-best4 = wlo.merge(best[["run_id"]], on="run_id")
-# nested pooled operating (per-run row, rule = nested_pooled_operating)
-nested = q("""
-  SELECT ot.run_id, mr.target_contaminant, mr.predictor_tier, mr.algorithm,
-         ot.optimized_probability_cutoff, ot.resulting_sensitivity, ot.resulting_specificity,
-         ot.false_negatives_count, ot.false_positives_count
-  FROM operational_thresholds ot JOIN model_runs mr ON ot.run_id = mr.run_id
-  WHERE mr.cv_mode = 'Stratified_Nested_CV'
-    AND ot.threshold_selection_rule = 'nested_pooled_operating'
-""")
-# pooled post-hoc prediction-instance counts (labelled as such)
-posthoc = q("""
-  SELECT ot.run_id, mr.target_contaminant, mr.predictor_tier, mr.algorithm,
-         ot.optimized_probability_cutoff, ot.resulting_sensitivity, ot.resulting_specificity,
-         ot.false_negatives_count, ot.false_positives_count
-  FROM operational_thresholds ot JOIN model_runs mr ON ot.run_id = mr.run_id
-  WHERE mr.cv_mode = 'Stratified_Nested_CV'
-    AND ot.threshold_selection_rule = 'sens_ge_0.90'
-""")
-t4 = best4.merge(nested.rename(columns={
-    "optimized_probability_cutoff": "nested_cutoff",
-    "resulting_sensitivity": "nested_sensitivity",
-    "resulting_specificity": "nested_specificity",
-    "false_negatives_count": "nested_fn",
-    "false_positives_count": "nested_fp"}), on="run_id", how="left").merge(
-    posthoc.rename(columns={
-        "optimized_probability_cutoff": "pooled_cutoff",
-        "resulting_sensitivity": "pooled_sensitivity",
-        "resulting_specificity": "pooled_specificity",
-        "false_negatives_count": "pooled_fn_instances",
-        "false_positives_count": "pooled_fp_instances"}), on="run_id", how="left")
+t4 = nw.merge(wlo, on="run_id", how="left")
+# canonical best models (Table 3 rows) + best EC-strict model per target
+keep = set(best["run_id"])
+t4 = t4[t4["run_id"].isin(keep)].copy()
+t4.loc[t4["run_id"].isin(set(base["run_id"])), "predictor_tier"] = "EC_only_baseline"
+t4 = t4.rename(columns={"TP": "tp_count", "TN": "tn_count", "FP": "fp_count", "FN": "fn_count"})
 save(t4, "Table4_operational_thresholds.csv")
 
 # ── Table 5: tier comparison ────────────────────────────────────────────────
@@ -221,7 +263,7 @@ s4_raw = q("""
     AND r.predictor_tier IN ('Tier1_Field','Tier2_Reduced','Tier3_Full')
 """)
 s4 = (s4_raw.groupby(["target_contaminant", "predictor_tier", "algorithm", "cv_mode"])
-      .agg(n_folds=("pr_auc", "size"),
+      .agg(n_folds=("pr_auc", "size"), n_folds_defined=("pr_auc", "count"),
            pr_auc_mean=("pr_auc", "mean"), pr_auc_sd=("pr_auc", "std"),
            roc_auc_mean=("roc_auc", "mean"), roc_auc_sd=("roc_auc", "std"),
            recall_mean=("recall_sensitivity", "mean"), recall_sd=("recall_sensitivity", "std"),
@@ -296,6 +338,23 @@ s10 = q("""
   ORDER BY mr.target_contaminant, mr.predictor_tier, mr.algorithm, mr.cv_mode
 """)
 save(s10, "TableS10_coordinate_ablation.csv")
+# Paired comparison: best multivariable model with vs without coordinates,
+# per target, tier and validation design (EC-only logistic is excluded because
+# it never uses coordinates).
+s10m = s10[s10.algorithm != "EcOnlyLogistic"].copy()
+s10m["tier_base"] = s10m.predictor_tier.str.replace("_no_coords", "", regex=False)
+s10m = s10m[s10m.tier_base.isin(CANONICAL_TIERS)]
+pairs = []
+for (t, tb, cv), g in s10m.groupby(["target_contaminant", "tier_base", "cv_mode"]):
+    w = g[g.has_coords == 1].sort_values("pr_auc", ascending=False).head(1)
+    n = g[g.has_coords == 0].sort_values("pr_auc", ascending=False).head(1)
+    if w.empty or n.empty:
+        continue
+    pairs.append({"target_contaminant": t, "tier": tb, "cv_mode": cv,
+                  "algorithm_with_coords": w.iloc[0].algorithm, "pr_auc_with_coords": w.iloc[0].pr_auc,
+                  "algorithm_no_coords": n.iloc[0].algorithm, "pr_auc_no_coords": n.iloc[0].pr_auc,
+                  "delta_no_minus_with": n.iloc[0].pr_auc - w.iloc[0].pr_auc})
+save(pd.DataFrame(pairs), "TableS10b_coordinate_ablation_pairs.csv")
 
 # ── TableS11: WHO-threshold sensitivity (from who_guideline DB) ─────────────
 print("TableS11")
@@ -380,6 +439,8 @@ s14 = q("""
          MIN(fc.n_train_pos) AS min_train_pos,
          ROUND(AVG(fc.n_train_pos), 1) AS mean_train_pos,
          MAX(fc.n_train_pos) AS max_train_pos,
+         ROUND(MIN(fc.n_train_pos * 1.0 / r.n_features), 2) AS min_events_per_variable,
+         ROUND(AVG(fc.n_train_pos * 1.0 / r.n_features), 2) AS mean_events_per_variable,
          ROUND(MIN(fc.n_train * 1.0 / r.n_features), 2) AS min_train_per_feature,
          ROUND(AVG(fc.n_train * 1.0 / r.n_features), 2) AS mean_train_per_feature,
          ROUND(MIN(m.pr_auc), 4) AS min_pr_auc,
@@ -387,7 +448,8 @@ s14 = q("""
          ROUND(MAX(m.pr_auc), 4) AS max_pr_auc
   FROM model_runs r
   JOIN fold_composition fc ON fc.run_id = r.run_id
-  JOIN fold_metrics m ON m.run_id = r.run_id
+  JOIN fold_metrics m ON m.run_id = r.run_id AND m.repeat_index = fc.repeat_index
+                     AND m.fold_index = fc.fold_index
   WHERE r.algorithm NOT IN ('DummyMajority','DummyStratified')
     AND r.predictor_tier IN ('Tier1_Field','Tier2_Reduced','Tier3_Full')
   GROUP BY r.target_contaminant, r.predictor_tier, r.algorithm, r.cv_mode, r.n_features
@@ -407,6 +469,23 @@ s15 = q("""
   ORDER BY r.target_contaminant, r.predictor_tier, r.algorithm, fc.fold_index
 """)
 save(s15, "TableS15_spatial_fold_transparency.csv")
+# Pooled spatial estimates over ALL held-out wells versus the binary-valid-only
+# subset (single-class held-out blocks excluded): quantifies the bias that
+# excluding single-class blocks would have introduced.
+s15b = q("""
+  SELECT r.target_contaminant, r.predictor_tier, r.algorithm,
+         a.n_wells AS n_wells_all, a.pr_auc AS pr_auc_all_held_out, a.roc_auc AS roc_auc_all_held_out,
+         b.n_wells AS n_wells_binary_valid, b.pr_auc AS pr_auc_binary_valid_only,
+         b.roc_auc AS roc_auc_binary_valid_only
+  FROM model_runs r
+  JOIN pooled_metrics a ON a.run_id = r.run_id AND a.scope = 'all_held_out'
+  LEFT JOIN pooled_metrics b ON b.run_id = r.run_id AND b.scope = 'binary_valid_only'
+  WHERE r.cv_mode = 'Spatial_Group_CV' AND r.algorithm NOT LIKE 'Dummy%'
+    AND r.predictor_tier IN ('Tier1_Field','Tier2_Reduced','Tier3_Full')
+  ORDER BY r.target_contaminant, r.predictor_tier, r.algorithm
+""")
+s15b["delta_binary_valid_minus_all"] = s15b["pr_auc_binary_valid_only"] - s15b["pr_auc_all_held_out"]
+save(s15b, "TableS15b_spatial_scope_comparison.csv")
 
 # ── TableS16: nested per-fold threshold summaries ───────────────────────────
 print("TableS16")
@@ -428,6 +507,29 @@ s16 = (s16_raw.groupby(["target_contaminant", "predictor_tier", "algorithm"])
        .round(4).reset_index()
        .sort_values(["target_contaminant", "predictor_tier", "algorithm"]))
 save(s16, "TableS16_nested_threshold_summary.csv")
+
+# ── TableS19: attribution shares for the headline / sensitivity models ──────
+print("TableS19")
+MODELS = [("TDS_EC_strict", "TDS", "Tier2_Reduced_TDS_EC_strict", "GradientBoostedTrees"),
+          ("Na_EC_strict", "Na", "Tier2_Reduced_Na_EC_strict", "RandomForest"),
+          ("Cl_EC_strict", "Cl", "Tier2_Reduced_Cl_EC_strict", "GradientBoostedTrees"),
+          ("B_Tier3", "B", "Tier3_Full", "RandomForest"),
+          ("F_Tier3", "F", "Tier3_Full", "GradientBoostedTrees")]
+rows = []
+for label, t, tier, alg in MODELS:
+    d = q(f"""
+      SELECT s.feature_name AS feature, AVG(ABS(s.shap_value)) AS mean_abs_shap
+      FROM shap_values s JOIN model_runs r ON r.run_id = s.run_id
+      WHERE r.target_contaminant = '{t}' AND r.predictor_tier = '{tier}'
+        AND r.algorithm = '{alg}' AND r.cv_mode = 'Stratified_Nested_CV'
+      GROUP BY s.feature_name ORDER BY mean_abs_shap DESC
+    """)
+    d["share_pct"] = 100 * d["mean_abs_shap"] / d["mean_abs_shap"].sum()
+    d["rank"] = range(1, len(d) + 1)
+    d.insert(0, "model", label)
+    d.insert(1, "algorithm", alg)
+    rows.append(d)
+save(pd.concat(rows, ignore_index=True), "TableS19_attribution_shares.csv")
 
 con.close()
 print("ALL TABLES DONE")

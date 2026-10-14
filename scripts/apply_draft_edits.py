@@ -1,5 +1,23 @@
 # -*- coding: utf-8 -*-
-"""Apply reviewer-response edits to draft8062026.docx, saved as a new revised file."""
+"""DEPRECATED: obsolete script, do not rerun.
+
+Kept below for provenance only. It applied reviewer-response edits to draft8062026.docx,
+but it hardcodes superseded headline numbers and methods, so rerunning it would
+reintroduce known errors:
+  1. feature attributions are described as Saabas path-based approximations; the
+     current method is exact interventional TreeSHAP (linear SHAP for linear models)
+     (DECISIONS.md, 2026-08-19);
+  2. spatial validation text describes Haversine-distance clustering and the superseded
+     fold design (DECISIONS.md, 2026-08-19 and 2026-10-14);
+  3. operational cutoffs are described as pooled post-hoc selection; the current method
+     selects cutoffs inside each outer fold from inner-CV predictions (DECISIONS.md, 2026-08-19).
+"""
+raise SystemExit(
+    "DEPRECATED: scripts/apply_draft_edits.py is obsolete and must not be rerun. It hardcodes "
+    "superseded numbers and methods (see DECISIONS.md, 2026-08-19 and 2026-10-14). Remove this "
+    "guard only to inspect the old code for provenance."
+)
+
 import docx
 from docx.shared import Pt
 import copy

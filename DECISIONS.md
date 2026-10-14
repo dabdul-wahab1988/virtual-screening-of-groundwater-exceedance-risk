@@ -6,17 +6,17 @@
 **Decision:** Implemented complete Rust package from scratch without external ML crates.
 **Justification:** Using pure Rust implementations (logistic regression via gradient descent,
 CART decision trees, random forest with bootstrap aggregation, gradient boosted trees with
-Newton-step leaves) avoids heavy compilation dependencies and gives full control over the
+mean-residual leaves) avoids heavy compilation dependencies and gives full control over the
 leakage-control guardrails. The csv crate was used instead of Polars since the dataset is small
 (n=81) and the csv crate is sufficient for reliable column-typed reading.
 
-**Decision:** Saabas path-based attributions used as TreeSHAP approximation.
-**Justification:** Exact interventional TreeSHAP (Lundberg 2018) requires per-tree path enumeration
+**Decision:** **SUPERSEDED (2026-08-19, see below).** Saabas path-based attributions used as TreeSHAP approximation.
+**Justification:** Exact path-dependent (cover-weighted) TreeSHAP (Lundberg 2018) requires per-tree path enumeration
 with exponential subset summation. For max_depth=3–5 and n=81 samples, the Saabas approximation
 gives directionally correct attributions that are adequate for SHAP summary plots.
 The paper should describe this as "path-based feature attribution" not exact Shapley values.
 
-**Decision:** Spatial k-means uses Haversine distance but computes inertia in coordinate space.
+**Decision:** **SUPERSEDED (2026-08-19, see below).** Spatial k-means uses Haversine distance but computes inertia in coordinate space.
 **Justification:** For the Pru Basin (< 100 km extent), geodetic curvature error is negligible.
 If wells were spread over > 1000 km, spherical k-means would be required.
 
@@ -34,7 +34,7 @@ distribution between 0 and the detection limit.
 ## 2026-08-19 — Revision round 2 (Track D)
 
 ### Attribution terminology and exact TreeSHAP (replaces the earlier SHAP decisions)
-**Decision (final):** Exact interventional TreeSHAP (Lundberg et al., 2018) is implemented natively for the tree models, with the training-fold data as the background distribution. Per-sample contributions use Shapley-weighted sums over subsets of the unique features on the sample's path (features off the path contribute zero); expected values marginalise non-fixed features over the background covers (node training counts, weighted by the positive-class weight for classification trees, so the decomposition is exactly additive on the fitted (weighted) tree values). Random forests are decomposed on the probability scale (base = mean of tree root probabilities); gradient-boosted trees on the log-odds scale (per-tree values scaled by the learning rate; base = initial log-odds + learning rate × sum of tree root means). Linear models use the exact linear SHAP decomposition (bias + Σ wⱼzⱼ on standardised features; the training background has zero mean, so it is exact). Database schema uses SHAP naming (`shap_values`, `fold_base_values`, `mean_absolute_shap`, `shap_value`, `shap_computation_time_ms`); exports use `shap_values_long.csv`; Figure 6 is `Figure6_SHAP_importance.png`. The implementation is unit-tested against brute-force Shapley enumeration (including repeated split features and class-weighted covers) and exact additivity.
+**Decision (final):** Exact path-dependent (cover-weighted) TreeSHAP (Lundberg et al., 2018) is implemented natively for the tree models, with the training-fold data as the background distribution (for random forests, the bootstrap covers: node training counts of each tree's bootstrap sample). Per-sample contributions use Shapley-weighted sums over subsets of the unique features on the sample's path (features off the path contribute zero); expected values marginalise non-fixed features over the background covers (node training counts, weighted by the positive-class weight for classification trees, so the decomposition is exactly additive on the fitted (weighted) tree values). Random forests are decomposed on the probability scale (base = mean of tree root probabilities); gradient-boosted trees on the log-odds scale (per-tree values scaled by the learning rate; base = initial log-odds + learning rate × sum of tree root means). Linear models use the exact linear SHAP decomposition (bias + Σ wⱼzⱼ on standardised features; the training background has zero mean, so it is exact). Database schema uses SHAP naming (`shap_values`, `fold_base_values`, `mean_absolute_shap`, `shap_value`, `shap_computation_time_ms`); exports use `shap_values_long.csv`; Figure 6 is `Figure6_SHAP_importance.png`. The implementation is unit-tested against brute-force Shapley enumeration (including repeated split features and class-weighted covers) and exact additivity.
 **Justification:** Reviewers 2/4 flagged that Saabas-style values must never be labelled SHAP (R2-07, R4-08; Gate 5). With max_depth ≤ 4 trees the exact algorithm is computationally trivial, so the scientifically stronger option (genuine SHAP) is taken instead of relabelling an approximation. The prior "exponential subset summation" concern applied to naive full Shapley enumeration over all features; the path-based TreeSHAP formulation with the off-path-weighting is polynomial and exact.
 
 ### Spatial clustering (revises the 2026-05-31 decision)
@@ -131,6 +131,36 @@ to the substitution (see REMAINING_LIMITATIONS).
 
 ### EC-only logistic base value
 **Decision:** For linear models the attribution base value is the bias term, giving an exact
-additive decomposition of the logit. For tree ensembles the base value is the training
-prevalence logit (random forest) or initial log-odds (gradient boosting); the Saabas
-decomposition is approximate and documented as such.
+additive decomposition of the logit. For tree ensembles the base value is the expected model output over the background: for random forests the mean of the tree root probabilities (probability scale, not the training-prevalence logit); for gradient boosting the initial log-odds plus the learning rate times the sum of the tree root mean residuals (log-odds scale). Tree attributions are exact TreeSHAP values (see the 2026-08-19 entry), so the earlier Saabas approximation no longer applies. (Corrected 2026-10-14.)
+
+---
+
+## 2026-10-14 — Code corrections: leave-one-cluster-out spatial validation and reporting fixes
+
+**Decision (spatial validation):** Spatial group CV is leave-one-cluster-out: each of the k projected k-means clusters is held out once (`cv.spatial_outer_folds: null`). The earlier round-robin merge of clusters into three folds is superseded.
+**Justification:** The arbitrary merge of clusters 0 and 3 gave one fold a 23-well training set, so fold size and composition depended on an arbitrary cluster grouping. Holding out each cluster once gives every geographic block the same role.
+
+**Decision (Brier null reference):** For each held-out fold, the prevalence-only null forecast is the prevalence of that fold's outer-training data; the pooled null averages these per-instance forecasts. Brier skill is computed against this null.
+**Justification:** The earlier reference could draw on held-out labels (null leakage). The reference should be what a surveillance programme could know before testing.
+
+**Decision (undefined fold metrics):** Metrics that are mathematically undefined for a single-class held-out fold (ROC-AUC, PR-AUC, balanced accuracy, calibration; recall without positives; specificity without negatives; F-scores without positives) are stored as NULL in `fold_metrics`, not as sentinel values. SQL `AVG` ignores NULLs.
+**Justification:** Sentinel values were averaged into fold summaries as if they were measurements.
+
+**Decision (cutoff provenance):** `nested_operational_thresholds.cutoff_selection_source` is `inner_cv_validation` when the operational cutoff was selected from inner-CV validation predictions, and `training_in_sample_fallback` when inner CV could not be formed and the cutoff was selected on in-sample training predictions. Fallback rows are flagged.
+**Justification:** The earlier in-sample fallback was silent, so an optimistic operating estimate could not be identified from the database.
+
+**Decision (raw feature values):** `shap_values.feature_raw_value` and `shap_values.feature_cleaned_value` store unscaled feature values.
+**Justification:** These columns previously held standardised values, which were mislabelled as raw.
+
+**Documentation corrections in the same pass:** the 2026-05-31 Newton-step leaf description is corrected to mean-residual leaves; the random-forest base value is the mean of tree root probabilities; the 2026-05-31 Saabas and Haversine decisions are superseded as marked above.
+
+
+### 2026-10-14 — TreeSHAP terminology corrected: path-dependent, not interventional
+The tree attributions use the node training counts (covers) to marginalise features that are not fixed
+(`tree_shap_expectation` in `src/models.rs`). That is the cover-weighted, path-dependent value function of
+Lundberg et al. (2018) (`feature_perturbation="tree_path_dependent"` in the reference implementation), solved
+EXACTLY by Shapley-weighted subset enumeration; it is not the interventional value function, which averages the
+model over an explicit background data set. All code comments, documentation, the manuscript, the supplement
+and the response letter now say "exact path-dependent (cover-weighted) TreeSHAP". Values are genuine Shapley
+values of that value function (verified against brute-force enumeration in the unit tests) and are not
+Saabas-style path contributions.

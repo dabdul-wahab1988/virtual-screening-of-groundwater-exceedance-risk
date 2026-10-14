@@ -1,6 +1,23 @@
 # -*- coding: utf-8 -*-
-"""Add Supplementary Tables S8 (bootstrap CIs) and S9 (spatial k-sensitivity),
-and extend Supplementary Methods S7 with clustering-algorithm detail."""
+"""DEPRECATED: obsolete script, do not rerun.
+
+Kept below for provenance only. It added Supplementary Tables S8 and S9 and extended
+Supplementary Methods S7, but it hardcodes superseded text and expects a superseded file
+layout, so rerunning it would reintroduce known errors:
+  1. S7 describes Haversine-distance k-means with coordinate-mean centroids; the current
+     method is Euclidean k-means (k-means++) on a local equirectangular projection
+     (DECISIONS.md, 2026-08-19);
+  2. S9 text describes spatial-group validation with three held-out folds; the current
+     design is leave-one-cluster-out (DECISIONS.md, 2026-10-14);
+  3. it reads outputs/r_exports/spatial_k_sensitivity_summary.csv with columns "3".."8";
+     summarize_k_sensitivity.py now writes k3..k8 to outputs/rev2/main/r_exports/.
+"""
+raise SystemExit(
+    "DEPRECATED: scripts/apply_supp_edits.py is obsolete and must not be rerun. It hardcodes "
+    "superseded clustering and fold-design text (see DECISIONS.md, 2026-08-19 and 2026-10-14). "
+    "Remove this guard only to inspect the old code for provenance."
+)
+
 import docx
 from docx.shared import Pt
 import pandas as pd

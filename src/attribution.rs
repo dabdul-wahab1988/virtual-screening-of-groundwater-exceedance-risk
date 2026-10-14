@@ -2,8 +2,9 @@ use crate::models::Model;
 
 /// Compute exact SHAP values for any model (Lundberg & Lee, 2017).
 ///
-/// Tree models: exact interventional TreeSHAP values (Lundberg et al., 2018)
-/// computed with the training-fold data as the background distribution; the
+/// Tree models: exact path-dependent (cover-weighted) TreeSHAP values (Lundberg et al., 2018)
+/// of the tree's cover-weighted conditional expectation (node training counts
+/// of the fitted trees; no explicit background data set); the
 /// decomposition is exactly additive (base value + sum of SHAP values = model
 /// output).
 ///

@@ -63,6 +63,7 @@ fn main() -> Result<()> {
             cv_modes,
             no_variants,
         } => cmd_run_pipeline(&db, &config, targets.as_deref(), tiers.as_deref(), cv_modes.as_deref(), no_variants),
+        Commands::UpdatePriority { db } => cmd_update_priority(&db),
         Commands::ExportR { db, out } => cmd_export_r(&db, &out),
         Commands::ExportGis { db, out } => cmd_export_gis(&db, &out),
     }
@@ -592,6 +593,32 @@ fn cmd_export_r(db_path: &str, out_dir: &str) -> Result<()> {
     export::export_r_files(&conn, out_dir)
 }
 
+fn cmd_update_priority(db_path: &str) -> Result<()> {
+    log::info!("=== update-priority ===");
+    let conn = open_db(db_path)?;
+    let sample_ids: Vec<String> = {
+        let mut stmt = conn.prepare("SELECT sample_id FROM raw_samples ORDER BY original_row_index")?;
+        let ids = stmt
+            .query_map([], |r| r.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<String>>>()?;
+        ids
+    };
+    let targets: Vec<String> = {
+        let mut stmt = conn.prepare(
+            "SELECT DISTINCT target_contaminant FROM model_runs WHERE run_status = 'completed' ORDER BY target_contaminant",
+        )?;
+        let t = stmt
+            .query_map([], |r| r.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<String>>>()?;
+        t
+    };
+    for t in &targets {
+        update_screening_priority(&conn, t, &sample_ids)?;
+    }
+    log::info!("screening priority recomputed for {} targets", targets.len());
+    Ok(())
+}
+
 fn cmd_export_gis(db_path: &str, out_dir: &str) -> Result<()> {
     log::info!("=== export-gis ===");
     let conn = open_db(db_path)?;
@@ -638,7 +665,19 @@ fn run_target_with_variant(
     let y: Vec<i32> = labelled.iter().map(|(_, l)| *l).collect();
     let n = sample_ids.len();
     let outer_folds = if cv_mode == "Spatial_Group_CV" {
-        cfg.cv.spatial_outer_folds.unwrap_or(cfg.cv.outer_folds)
+        // Default: leave-one-cluster-out (one outer fold per spatial cluster).
+        // An explicit spatial_outer_folds merges clusters round-robin and is
+        // retained only for backwards-compatible sensitivity runs.
+        match cfg.cv.spatial_outer_folds {
+            Some(k) => k,
+            None => {
+                let assignments = spatial::load_cluster_assignments(conn)?;
+                let mut ids: Vec<usize> = assignments.iter().map(|(_, c)| *c).collect();
+                ids.sort_unstable();
+                ids.dedup();
+                ids.len()
+            }
+        }
     } else {
         cfg.cv.outer_folds
     };
@@ -692,6 +731,13 @@ fn run_target_with_variant(
                     tep,
                     ten
                 );
+            }
+            if folds.len() != outer_folds {
+                return Err(anyhow!(
+                    "Spatial_Group_CV produced {} non-empty folds but {} spatial blocks were requested",
+                    folds.len(),
+                    outer_folds
+                ));
             }
             folds
         }
@@ -854,8 +900,10 @@ fn run_target_with_variant(
         let mut nested_fp = 0usize;
         let mut nested_fn = 0usize;
         // Train prevalence across all folds (null Brier reference).
-        let mut pooled_train_pos = 0usize;
-        let mut pooled_train_n = 0usize;
+        // Null (prevalence-only) forecasts: each held-out prediction is
+        // compared with its own outer-training-fold prevalence, so no test
+        // label ever enters the reference forecast.
+        let mut null_probs_all: Vec<f64> = Vec::new();
 
         for fold in &folds {
             let x_train = subset_rows(&x_full, &fold.train_idx);
@@ -867,8 +915,8 @@ fn run_target_with_variant(
             let (train_pos, train_neg, test_pos, test_neg) = cv::fold_class_counts(&y, fold);
             let (fold_status, metrics_defined) =
                 cv::fold_status_label(train_pos, train_neg, test_pos, test_neg);
-            pooled_train_pos += train_pos;
-            pooled_train_n += train_pos + train_neg;
+            let fold_train_prev = train_pos as f64 / (train_pos + train_neg).max(1) as f64;
+            null_probs_all.extend(std::iter::repeat(fold_train_prev).take(y_test.len()));
 
             let fold_seed = cfg
                 .cv
@@ -972,19 +1020,37 @@ fn run_target_with_variant(
 
             // ── Fold metrics ─────────────────────────────────────────
             let mut metrics_bundle = metrics::compute_all_metrics(&y_test, &proba);
-            // Null Brier reference based on TRAINING prevalence (conservative:
-            // the prevalence a surveillance programme would know historically).
-            if pooled_train_n > 0 {
-                let train_prev = pooled_train_pos as f64 / pooled_train_n as f64;
+            // Null Brier reference based on this fold's TRAINING prevalence
+            // (the prevalence a surveillance programme would know beforehand).
+            {
                 let null_brier = metrics::compute_brier(
                     &y_test,
-                    &vec![train_prev; y_test.len()],
+                    &vec![fold_train_prev; y_test.len()],
                 );
                 metrics_bundle.brier_null = null_brier;
-                if null_brier > 1e-12 {
-                    metrics_bundle.brier_skill = 1.0 - metrics_bundle.brier_score / null_brier;
-                }
+                metrics_bundle.brier_skill = if null_brier > 1e-12 {
+                    1.0 - metrics_bundle.brier_score / null_brier
+                } else {
+                    f64::NAN
+                };
             }
+            // Metrics that are mathematically undefined for a single-class
+            // held-out fold are stored as NULL (never as sentinel values), so
+            // fold-level means can never absorb them.
+            let undefined_auc = test_pos == 0 || test_neg == 0;
+            let nz = |v: f64, undefined: bool| -> Option<f64> {
+                if undefined || v.is_nan() { None } else { Some(v) }
+            };
+            let m_roc = nz(metrics_bundle.roc_auc, undefined_auc);
+            let m_pr = nz(metrics_bundle.pr_auc, undefined_auc);
+            let m_bal = nz(metrics_bundle.balanced_accuracy, undefined_auc);
+            let m_rec = nz(metrics_bundle.recall_sensitivity, test_pos == 0);
+            let m_spec = nz(metrics_bundle.specificity, test_neg == 0);
+            let m_f1 = nz(metrics_bundle.f1_score, test_pos == 0);
+            let m_f2 = nz(metrics_bundle.f2_score, test_pos == 0);
+            let m_cs = nz(metrics_bundle.calibration_slope, undefined_auc);
+            let m_ci = nz(metrics_bundle.calibration_intercept, undefined_auc);
+            let m_bskill = nz(metrics_bundle.brier_skill, false);
             conn.execute(
                 "INSERT INTO fold_metrics
                  (run_id, cv_mode, repeat_index, fold_index,
@@ -996,11 +1062,9 @@ fn run_target_with_variant(
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
                 rusqlite::params![
                     run_id, cv_mode, fold.repeat as i64, fold.fold as i64,
-                    metrics_bundle.roc_auc, metrics_bundle.pr_auc,
-                    metrics_bundle.balanced_accuracy, metrics_bundle.recall_sensitivity,
-                    metrics_bundle.specificity, metrics_bundle.f1_score, metrics_bundle.f2_score,
-                    metrics_bundle.brier_score, metrics_bundle.brier_null, metrics_bundle.brier_skill,
-                    metrics_bundle.calibration_slope, metrics_bundle.calibration_intercept,
+                    m_roc, m_pr, m_bal, m_rec, m_spec, m_f1, m_f2,
+                    metrics_bundle.brier_score, metrics_bundle.brier_null, m_bskill,
+                    m_cs, m_ci,
                     metrics_bundle.n_pos as i64, metrics_bundle.n_neg as i64,
                     train_ms,
                 ],
@@ -1073,10 +1137,13 @@ fn run_target_with_variant(
             // Cutoff chosen on inner-CV validation predictions only, frozen,
             // then applied to this fold's held-out test predictions.
             if *algorithm != "DummyMajority" && *algorithm != "DummyStratified" {
+                let mut cutoff_source = "inner_cv_validation";
                 if inner_pooled.is_empty() {
-                    // Fallback: select on in-sample training predictions.
+                    // Fallback (flagged in the database): select on in-sample
+                    // training predictions when inner CV could not be formed.
                     let p_train = model.predict_proba(&x_train_scaled);
                     inner_pooled = y_train.iter().copied().zip(p_train).collect();
+                    cutoff_source = "training_in_sample_fallback";
                 }
                 let (rule, cutoff) =
                     thresholds_operational::select_nested_cutoff(
@@ -1097,13 +1164,14 @@ fn run_target_with_variant(
                     fold.repeat,
                     fold.fold,
                     &rule,
+                    cutoff_source,
                     cutoff,
                     &y_test,
                     &proba,
                 )?;
             }
 
-            // ── SHAP values (exact interventional TreeSHAP for trees;
+            // ── SHAP values (exact path-dependent (cover-weighted) TreeSHAP for trees;
             //    exact linear SHAP for linear models) ───────────────────
             let attr_start = Instant::now();
             let attr_result =
@@ -1126,7 +1194,7 @@ fn run_target_with_variant(
                 &ids_test,
                 &feature_names,
                 &attr_result,
-                &x_test_scaled,
+                &x_test,
                 cv_mode,
                 fold.repeat,
                 fold.fold,
@@ -1174,8 +1242,8 @@ fn run_target_with_variant(
         // ── Pooled metrics across all unique held-out predictions ────
         if !all_true.is_empty() && !all_pred.is_empty() {
             let bundle = metrics::compute_all_metrics(&all_true, &all_pred);
-            let null = if pooled_train_n > 0 {
-                metrics::compute_brier_null(pooled_train_pos, pooled_train_n - pooled_train_pos)
+            let null = if !null_probs_all.is_empty() && null_probs_all.len() == all_true.len() {
+                metrics::compute_brier(&all_true, &null_probs_all)
             } else {
                 0.25
             };
@@ -1405,8 +1473,8 @@ fn update_well_level_metrics(
     Ok(())
 }
 
-/// Select the best completed canonical (non-dummy, non-sensitivity) run for a
-/// target, then upsert the screening_priority table from that run's out-of-fold
+/// Select the best completed canonical (non-dummy, non-sensitivity) stratified-CV run for a
+/// target (highest pooled out-of-fold PR-AUC; every well has several repeated predictions), then upsert the screening_priority table from that run's out-of-fold
 /// predictions only. Screening priority is defined on well-level median
 /// out-of-fold probabilities under the pre-specified probability bands.
 fn update_screening_priority(conn: &Connection, target: &str, sample_ids: &[String]) -> Result<()> {
@@ -1417,16 +1485,14 @@ fn update_screening_priority(conn: &Connection, target: &str, sample_ids: &[Stri
         .query_row(
             "SELECT mr.run_id
          FROM model_runs mr
-         JOIN fold_metrics fm ON fm.run_id = mr.run_id
+         JOIN pooled_metrics pm ON pm.run_id = mr.run_id AND pm.scope = 'all_held_out'
          WHERE mr.target_contaminant = ?1
            AND mr.run_status = 'completed'
            AND mr.algorithm NOT IN ('DummyMajority', 'DummyStratified')
            AND mr.labeling_variant = 'main'
+           AND mr.cv_mode = 'Stratified_Nested_CV'
            AND mr.predictor_tier IN ('Tier1_Field', 'Tier2_Reduced', 'Tier3_Full')
-         GROUP BY mr.run_id
-         ORDER BY AVG(fm.pr_auc) DESC,
-                  AVG(fm.brier_score) ASC,
-                  CASE mr.cv_mode WHEN 'Stratified_Nested_CV' THEN 0 ELSE 1 END ASC
+         ORDER BY pm.pr_auc DESC, pm.brier_score ASC, mr.run_id ASC
          LIMIT 1",
             rusqlite::params![target],
             |r| r.get(0),

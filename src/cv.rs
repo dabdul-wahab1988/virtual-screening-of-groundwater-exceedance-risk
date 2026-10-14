@@ -117,7 +117,9 @@ pub fn spatial_group_kfold(
     // Group sample indices by cluster
     let mut cluster_indices: Vec<Vec<usize>> = vec![vec![]; n_clusters];
     for (i, sid) in sample_ids.iter().enumerate() {
-        let cid = *cluster_map.get(sid.as_str()).unwrap_or(&0);
+        let cid = *cluster_map.get(sid.as_str()).ok_or_else(|| {
+            anyhow!("sample {} has no spatial-cluster assignment", sid)
+        })?;
         cluster_indices[cid].push(i);
     }
 

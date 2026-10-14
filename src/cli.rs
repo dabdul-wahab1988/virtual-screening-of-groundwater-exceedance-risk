@@ -84,6 +84,13 @@ pub enum Commands {
         no_variants: bool,
     },
 
+    /// Recompute the screening-priority table on a (merged) database from the best
+    /// stratified-CV model of every eligible target
+    UpdatePriority {
+        #[arg(long)]
+        db: String,
+    },
+
     /// Export R-ready CSV files from SQLite
     ExportR {
         #[arg(long)]

@@ -86,23 +86,29 @@ def main():
     ].copy()
     # Exclude sensitivity variants (tier names with suffixes)
     sel = sel[~sel["predictor_tier"].str.contains("no_coords|EC_strict|EC_inclusive")]
+    # Tier-specific best among the multivariable models (the EC-only logistic
+    # baseline uses only EC and is bootstrapped separately as a reference row).
+    multi = sel[sel["algorithm"] != "EcOnlyLogistic"]
     best_idx = (
-        sel.sort_values("pr_auc", ascending=False)
+        multi.sort_values("pr_auc", ascending=False)
         .groupby(["target_contaminant", "predictor_tier"], sort=False)
         .head(1)
         .index
     )
     headline = sel.loc[best_idx]
-    # The TDS EC-strict sensitivity model is a headline recommendation and is
-    # bootstrapped explicitly (it is excluded from the canonical filter above).
+    baseline = sel[(sel["algorithm"] == "EcOnlyLogistic") & (sel["predictor_tier"] == "Tier1_Field")]
+    headline = pd.concat([headline, baseline], ignore_index=True)
+    # EC-strict sensitivity models (TDS, Na, Cl) are bootstrapped explicitly
+    # (excluded from the canonical filter above).
     strict = pooled[
         (pooled["cv_mode"] == "Stratified_Nested_CV")
         & (pooled["scope"] == "all_held_out")
         & (~pooled["algorithm"].str.startswith("Dummy"))
-        & (pooled["predictor_tier"] == "Tier2_Reduced_TDS_EC_strict")
+        & (pooled["predictor_tier"].str.endswith("_EC_strict"))
     ]
     if not strict.empty:
-        strict_best = strict.sort_values("pr_auc", ascending=False).head(1)
+        strict_best = (strict.sort_values("pr_auc", ascending=False)
+                       .groupby(["target_contaminant", "predictor_tier"], sort=False).head(1))
         headline = pd.concat([headline, strict_best], ignore_index=True)
     print(f"Headline selections: {len(headline)}")
 

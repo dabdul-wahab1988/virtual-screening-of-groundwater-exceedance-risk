@@ -19,7 +19,7 @@ import concurrent.futures
 from pathlib import Path
 
 ROOT = Path(r"C:\Users\ThinkPad P1 G4\Documents\Dr_Sukari_Manuscript\manuscript_4b\groundwater_virtual_screening")
-GVS = ROOT / "target_rev2" / "release" / "gvs.exe"
+GVS = ROOT / "target_rev2b" / "release" / "gvs.exe"  # build: cargo build --release --target-dir target_rev2b
 OUT = ROOT / "outputs" / "rev2"
 MAX_WORKERS = 10
 
@@ -120,6 +120,10 @@ def merge_partitions(cfg_name: str, thresholds_yaml: str, cfg_yaml: str) -> Path
     parts = sorted(db_dir.glob("*.db"))
     subprocess.run([sys.executable, str(ROOT / "scripts/merge_partition_dbs.py"),
                     str(canonical)] + [str(p) for p in parts], check=True, cwd=str(ROOT))
+    # Screening priority is recomputed on the MERGED database from the best
+    # stratified-CV model (partition databases each hold only one CV mode).
+    subprocess.run([str(GVS), "update-priority", "--db", str(canonical)], check=True,
+                   cwd=str(ROOT), capture_output=True)
     # Export R and GIS outputs from the canonical DB
     for sub, out in [("export-r", "r_exports"), ("export-gis", "gis_exports")]:
         subprocess.run([str(GVS), sub, "--db", str(canonical),
