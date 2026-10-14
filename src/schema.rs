@@ -169,7 +169,9 @@ CREATE TABLE IF NOT EXISTS spatial_cluster_metadata (
     centroid_latitude               REAL NOT NULL,
     centroid_longitude              REAL NOT NULL,
     number_of_wells                 INTEGER NOT NULL,
-    max_intra_cluster_distance_km   REAL
+    max_intra_cluster_distance_km   REAL,
+    clustering_method               TEXT,
+    projection                      TEXT
 );
 
 CREATE TABLE IF NOT EXISTS sample_spatial_assignment (
@@ -194,6 +196,25 @@ CREATE TABLE IF NOT EXISTS fold_assignments (
     tier_name          TEXT NOT NULL,
     random_seed        INTEGER NOT NULL,
     UNIQUE(cv_mode, repeat_index, fold_index, sample_id, target_contaminant, tier_name)
+);
+
+-- Per-fold status and class composition (esp. spatial CV transparency).
+CREATE TABLE IF NOT EXISTS fold_composition (
+    comp_id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id             TEXT NOT NULL REFERENCES model_runs(run_id),
+    cv_mode            TEXT NOT NULL,
+    repeat_index       INTEGER NOT NULL,
+    fold_index         INTEGER NOT NULL,
+    fold_status        TEXT NOT NULL,
+    metrics_defined    INTEGER NOT NULL DEFAULT 0,
+    n_train            INTEGER NOT NULL,
+    n_train_pos        INTEGER NOT NULL,
+    n_train_neg        INTEGER NOT NULL,
+    n_test             INTEGER NOT NULL,
+    n_test_pos         INTEGER NOT NULL,
+    n_test_neg         INTEGER NOT NULL,
+    member_cluster_ids TEXT,
+    UNIQUE(run_id, cv_mode, repeat_index, fold_index)
 );
 
 -- =========================================================
@@ -222,7 +243,8 @@ CREATE TABLE IF NOT EXISTS model_runs (
     cpu_threads_used     INTEGER,
     total_execution_time_ms INTEGER,
     run_status           TEXT NOT NULL DEFAULT 'completed',
-    skip_reason          TEXT
+    skip_reason          TEXT,
+    labeling_variant     TEXT NOT NULL DEFAULT 'main'
 );
 
 CREATE TABLE IF NOT EXISTS model_hyperparameters (
@@ -259,6 +281,8 @@ CREATE TABLE IF NOT EXISTS fold_metrics (
     f1_score               REAL,
     f2_score               REAL,
     brier_score            REAL,
+    brier_null             REAL,
+    brier_skill            REAL,
     calibration_slope      REAL,
     calibration_intercept  REAL,
     n_test_pos             INTEGER,
@@ -295,6 +319,8 @@ CREATE TABLE IF NOT EXISTS fold_feature_tracking (
     selection_reason   TEXT
 );
 
+-- Exact path-dependent (cover-weighted) TreeSHAP values (Lundberg et al., 2018), computed with
+-- the training-fold data as the background distribution.
 CREATE TABLE IF NOT EXISTS shap_values (
     shap_id              INTEGER PRIMARY KEY AUTOINCREMENT,
     run_id               TEXT NOT NULL REFERENCES model_runs(run_id),
@@ -312,6 +338,7 @@ CREATE TABLE IF NOT EXISTS shap_values (
 -- THRESHOLD & EXPORT TABLES
 -- =========================================================
 
+-- Pooled (post-hoc) operational thresholds over all out-of-fold predictions.
 CREATE TABLE IF NOT EXISTS operational_thresholds (
     ot_id                         INTEGER PRIMARY KEY AUTOINCREMENT,
     run_id                        TEXT NOT NULL REFERENCES model_runs(run_id),
@@ -324,6 +351,91 @@ CREATE TABLE IF NOT EXISTS operational_thresholds (
     false_positives_count         INTEGER NOT NULL
 );
 
+-- Fully nested operational thresholds: cutoff selected inside each outer fold
+-- on inner-CV validation predictions only, then applied to that fold's test set.
+CREATE TABLE IF NOT EXISTS nested_operational_thresholds (
+    nt_id                         INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id                        TEXT NOT NULL REFERENCES model_runs(run_id),
+    cv_mode                       TEXT NOT NULL,
+    repeat_index                  INTEGER NOT NULL,
+    fold_index                    INTEGER NOT NULL,
+    threshold_selection_rule      TEXT NOT NULL,
+    cutoff_selection_source       TEXT NOT NULL DEFAULT 'inner_cv_validation',
+    optimized_probability_cutoff  REAL NOT NULL,
+    sensitivity                   REAL NOT NULL,
+    specificity                   REAL NOT NULL,
+    precision                     REAL NOT NULL,
+    f1_score                      REAL,
+    f1_5_score                    REAL,
+    f2_score                      REAL,
+    f3_score                      REAL,
+    false_negatives_count         INTEGER NOT NULL,
+    false_positives_count         INTEGER NOT NULL,
+    n_test_pos                    INTEGER NOT NULL,
+    n_test_neg                    INTEGER NOT NULL
+);
+
+-- Pooled metrics over all unique held-out predictions for a run.
+CREATE TABLE IF NOT EXISTS pooled_metrics (
+    pm_id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id                TEXT NOT NULL REFERENCES model_runs(run_id),
+    cv_mode               TEXT NOT NULL,
+    scope                 TEXT NOT NULL,
+    n_wells               INTEGER NOT NULL,
+    n_pos                 INTEGER NOT NULL,
+    n_neg                 INTEGER NOT NULL,
+    roc_auc               REAL,
+    pr_auc                REAL,
+    recall                REAL,
+    specificity           REAL,
+    f1_score              REAL,
+    f2_score              REAL,
+    balanced_accuracy     REAL,
+    brier_score           REAL,
+    brier_null            REAL,
+    brier_skill           REAL,
+    UNIQUE(run_id, cv_mode, scope)
+);
+
+-- Well-level consolidated out-of-fold predictions (median per well).
+CREATE TABLE IF NOT EXISTS well_level_metrics (
+    wlm_id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id                TEXT NOT NULL REFERENCES model_runs(run_id),
+    sample_id             TEXT NOT NULL REFERENCES raw_samples(sample_id),
+    target_contaminant    TEXT NOT NULL,
+    predictor_tier        TEXT NOT NULL,
+    algorithm             TEXT NOT NULL,
+    cv_mode               TEXT NOT NULL,
+    true_label            INTEGER,
+    n_predictions         INTEGER NOT NULL,
+    median_probability    REAL,
+    mean_probability      REAL,
+    lower_ci              REAL,
+    upper_ci              REAL,
+    UNIQUE(run_id, sample_id)
+);
+
+-- Operating characteristics at the well level (each well contributes once).
+CREATE TABLE IF NOT EXISTS well_level_operating (
+    wlo_id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id                TEXT NOT NULL REFERENCES model_runs(run_id),
+    cv_mode               TEXT NOT NULL,
+    threshold_selection_rule      TEXT NOT NULL,
+    cutoff_source         TEXT NOT NULL,
+    optimized_probability_cutoff  REAL NOT NULL,
+    tp_count              INTEGER NOT NULL,
+    tn_count              INTEGER NOT NULL,
+    fp_count              INTEGER NOT NULL,
+    fn_count              INTEGER NOT NULL,
+    sensitivity           REAL NOT NULL,
+    specificity           REAL NOT NULL,
+    precision             REAL NOT NULL,
+    f2_score              REAL NOT NULL,
+    n_wells               INTEGER NOT NULL,
+    n_pos_wells           INTEGER NOT NULL,
+    n_neg_wells           INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS threshold_sensitivity (
     ts_id                INTEGER PRIMARY KEY AUTOINCREMENT,
     run_id               TEXT NOT NULL REFERENCES model_runs(run_id),
@@ -333,7 +445,9 @@ CREATE TABLE IF NOT EXISTS threshold_sensitivity (
     specificity          REAL NOT NULL,
     precision            REAL,
     f1_score             REAL,
+    f1_5_score           REAL,
     f2_score             REAL,
+    f3_score             REAL,
     false_negatives_count INTEGER NOT NULL,
     false_positives_count INTEGER NOT NULL
 );

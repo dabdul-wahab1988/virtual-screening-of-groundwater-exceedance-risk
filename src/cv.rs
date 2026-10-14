@@ -117,7 +117,9 @@ pub fn spatial_group_kfold(
     // Group sample indices by cluster
     let mut cluster_indices: Vec<Vec<usize>> = vec![vec![]; n_clusters];
     for (i, sid) in sample_ids.iter().enumerate() {
-        let cid = *cluster_map.get(sid.as_str()).unwrap_or(&0);
+        let cid = *cluster_map.get(sid.as_str()).ok_or_else(|| {
+            anyhow!("sample {} has no spatial-cluster assignment", sid)
+        })?;
         cluster_indices[cid].push(i);
     }
 
@@ -187,6 +189,35 @@ pub fn validate_binary_folds(
     }
 
     Ok(())
+}
+
+/// Class counts for a fold.
+pub fn fold_class_counts(y: &[i32], fold: &Fold) -> (usize, usize, usize, usize) {
+    let (train_pos, train_neg) = class_counts(y, &fold.train_idx);
+    let (test_pos, test_neg) = class_counts(y, &fold.test_idx);
+    (train_pos, train_neg, test_pos, test_neg)
+}
+
+/// Human-readable status of a fold's class composition, used for transparent
+/// reporting of spatial folds (single-class folds are retained and flagged,
+/// never silently dropped).
+pub fn fold_status_label(
+    train_pos: usize,
+    train_neg: usize,
+    test_pos: usize,
+    test_neg: usize,
+) -> (String, bool) {
+    if train_pos == 0 || train_neg == 0 {
+        ("train_single_class".to_string(), false)
+    } else if test_pos == 0 && test_neg == 0 {
+        ("test_empty".to_string(), false)
+    } else if test_pos == 0 {
+        ("test_negatives_only".to_string(), false)
+    } else if test_neg == 0 {
+        ("test_positives_only".to_string(), false)
+    } else {
+        ("both_classes".to_string(), true)
+    }
 }
 
 fn class_counts(y: &[i32], idx: &[usize]) -> (usize, usize) {

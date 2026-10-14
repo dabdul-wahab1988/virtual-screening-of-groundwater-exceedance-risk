@@ -74,6 +74,21 @@ pub enum Commands {
         db: String,
         #[arg(long)]
         config: String,
+        #[arg(long, help = "Comma-separated target filter (default: all eligible)")]
+        targets: Option<String>,
+        #[arg(long, help = "Comma-separated tier filter (default: all tiers)")]
+        tiers: Option<String>,
+        #[arg(long, help = "Comma-separated CV-mode filter (default: both modes)")]
+        cv_modes: Option<String>,
+        #[arg(long, help = "Skip sensitivity variants (coordinate ablation, EC ablation, TDS variants)")]
+        no_variants: bool,
+    },
+
+    /// Recompute the screening-priority table on a (merged) database from the best
+    /// stratified-CV model of every eligible target
+    UpdatePriority {
+        #[arg(long)]
+        db: String,
     },
 
     /// Export R-ready CSV files from SQLite

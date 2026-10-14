@@ -14,6 +14,11 @@ targets:
       - "_Na"
       - "SAR"
       - "sodium"
+    special_models:
+      Na_EC_strict:
+        forbidden_exact:
+          - "EC"
+        notes: "Sensitivity model: removes EC to test whether sodium screenability survives without the conductivity field proxy"
     notes: "SAR = Na/sqrt(0.5*(Ca+Mg)) — contains Na directly"
 
   Cl:
@@ -24,6 +29,11 @@ targets:
       - "_Cl"
       - "Cl_HCO3"
       - "chloride"
+    special_models:
+      Cl_EC_strict:
+        forbidden_exact:
+          - "EC"
+        notes: "Sensitivity model: removes EC to test whether chloride screenability survives without the conductivity field proxy"
     notes: "Cl/HCO3 ratio contains Cl directly"
 
   TDS:

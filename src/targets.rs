@@ -85,7 +85,7 @@ pub fn ingest_cleaned_measurements(
             };
 
             let (cleaned_val, is_bdl, is_err, parsed_bdl_rule) =
-                parse_numeric_bdl_with_limit(raw_val, substitution_limit);
+                parse_numeric_bdl_with_limit(raw_val, substitution_limit, bdl_method);
             if is_bdl {
                 bdl_count += 1;
             }

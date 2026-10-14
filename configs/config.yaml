@@ -1,6 +1,6 @@
 project:
   name: "groundwater_virtual_screening_pru"
-  version: "0.1.0"
+  version: "0.2.0"
 
 paths:
   input_csv:           "data/raw/pru.csv"
@@ -13,18 +13,35 @@ paths:
 
 cv:
   outer_folds:                    5
-  spatial_outer_folds:            3
+  # null = leave-one-cluster-out: every spatial cluster is held out once.
+  spatial_outer_folds:            null
   inner_folds:                    3
   repeats:                        5
   random_seed:                    20260531
   minimum_positive_cases_for_ml:  5
+  # Fully nested operational-threshold selection: the cutoff is chosen on
+  # inner-CV validation predictions inside each outer fold and then frozen and
+  # applied to the outer held-out test data. Pooled post-hoc cutoffs are
+  # retained only as a labelled comparison.
+  nested_threshold_selection:     true
+  nested_threshold_rule:          "sens_ge_0.90"
 
 spatial:
   latitude_column:          "Dy"
   longitude_column:         "Dx"
-  clustering_method:        "kmeans"
+  # Coordinates are projected to a local equirectangular plane (km) centred on
+  # the basin centroid and clustered with Euclidean k-means (k-means++ init,
+  # deterministic seed). Great-circle centroids are NOT used: coordinate-mean
+  # centroids are only the true least-squares centres under Euclidean distance
+  # on the projected plane.
+  clustering_method:        "equirectangular_kmeans"
   number_of_spatial_clusters: null
   max_clusters:             8
+  min_clusters:             3
+  # Spatial folds containing a single outcome class are retained and flagged
+  # (fold_composition table); they never abort a run and never silently
+  # disappear from the assessment.
+  keep_single_class_folds:  true
 
 models:
   run_majority_dummy:          true
@@ -34,8 +51,15 @@ models:
   run_random_forest:           true
   run_gradient_boosted_tree:   true
   run_svm:                     false
+  # Coordinate-ablation sensitivity: for every tier, run a counterpart that
+  # excludes longitude/latitude to test whether explicit location information
+  # drives discrimination.
+  run_coordinate_ablation:     true
+  # EC-ablation sensitivity targets: Tier-2 variants with EC excluded, to
+  # distinguish field-proxy screening from richer hydrochemical signal.
+  ec_ablation_targets:         ["Na", "Cl"]
 
 outputs:
   write_fold_predictions: true
-  write_shap_values:      true
+  write_attributions:     true
   write_gis_exports:      true

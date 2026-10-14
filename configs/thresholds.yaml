@@ -21,15 +21,15 @@ targets:
     threshold_value: 750.0
     threshold_source: "Precautionary risk-alert threshold: 75% of WHO/Ghana Standard"
     exceedance_direction: "greater_than"
-    notes: "Early-warning screening threshold set at 75% of the 1000 mg/L WHO/Ghana guideline"
+    notes: "Early-warning screening threshold set at 75% of the 1000 mg/L WHO/Ghana guideline; study-defined acceptability-based dissolved-solids screening threshold"
 
   B:
     column: "B"
     unit: "mg/L"
     threshold_value: 1.125
-    threshold_source: "Precautionary risk-alert threshold: 75% of WHO 2017"
+    threshold_source: "Study-defined threshold inherited from the original modelling configuration"
     exceedance_direction: "greater_than"
-    notes: "Early-warning screening threshold set at 75% of the 1.5 mg/L WHO guideline"
+    notes: "Retained from the original modelling configuration; NOT 75% of a current WHO boron guideline (WHO boron guideline value is 2.4 mg/L)"
 
   F:
     column: "F"

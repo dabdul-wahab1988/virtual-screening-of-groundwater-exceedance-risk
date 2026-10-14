@@ -44,3 +44,10 @@ __pycache__/
 *.pptx
 *.xls
 *.xlsx
+
+/target_rev2/
+
+
+# Alternative build directories
+/target_rev2*/
+/target_test/

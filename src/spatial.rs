@@ -1,34 +1,107 @@
 use crate::utils::haversine_km;
 use anyhow::Result;
+use rand::Rng;
+use rand::SeedableRng;
+use rand_chacha::ChaCha8Rng;
 use rusqlite::Connection;
 
-/// K-means clustering on (latitude, longitude) pairs.
-/// Returns cluster assignments (0-based) for each sample.
-pub fn kmeans_cluster(coords: &[(f64, f64)], k: usize, max_iter: usize, _seed: u64) -> Vec<usize> {
+const EARTH_RADIUS_KM: f64 = 6371.0;
+
+/// Project (lat, lon) pairs onto a local equirectangular plane centred on the
+/// dataset centroid. Distances are in kilometres. For a basin of < 100 km
+/// extent, the planar approximation error is negligible (sub-kilometre), and
+/// Euclidean k-means on the projected coordinates is mathematically coherent:
+/// the centroid update (coordinate mean) is the true least-squares centre of
+/// the projected cluster, unlike mean lat/lon under great-circle distance.
+pub fn project_equirectangular(coords: &[(f64, f64)]) -> (Vec<(f64, f64)>, f64, f64) {
     let n = coords.len();
+    if n == 0 {
+        return (vec![], 0.0, 0.0);
+    }
+    let lat0 = coords.iter().map(|c| c.0).sum::<f64>() / n as f64;
+    let lon0 = coords.iter().map(|c| c.1).sum::<f64>() / n as f64;
+    let cos_lat0 = lat0.to_radians().cos().max(1e-6);
+    let projected: Vec<(f64, f64)> = coords
+        .iter()
+        .map(|&(lat, lon)| {
+            let x = (lon - lon0).to_radians() * cos_lat0 * EARTH_RADIUS_KM;
+            let y = (lat - lat0).to_radians() * EARTH_RADIUS_KM;
+            (x, y)
+        })
+        .collect();
+    (projected, lat0, lon0)
+}
+
+/// Inverse equirectangular projection back to (lat, lon).
+#[allow(dead_code)]
+pub fn unproject(lat0: f64, lon0: f64, x_km: f64, y_km: f64) -> (f64, f64) {
+    let cos_lat0 = lat0.to_radians().cos().max(1e-6);
+    let lon = lon0 + (x_km / EARTH_RADIUS_KM / cos_lat0).to_degrees();
+    let lat = lat0 + (y_km / EARTH_RADIUS_KM).to_degrees();
+    (lat, lon)
+}
+
+/// Euclidean k-means on projected coordinates with deterministic k-means++
+/// initialisation (seeded). Returns cluster assignments (0-based).
+pub fn kmeans_cluster_projected(
+    projected: &[(f64, f64)],
+    k: usize,
+    max_iter: usize,
+    seed: u64,
+) -> Vec<usize> {
+    let n = projected.len();
     if n == 0 || k == 0 {
         return vec![];
     }
     let k = k.min(n);
+    let mut rng = ChaCha8Rng::seed_from_u64(seed);
 
-    // Initialise centroids using KMeans++ style (deterministic via seed)
-    let mut centroids: Vec<(f64, f64)> = {
-        // Use evenly-spaced indices as starting centroids (simple and deterministic)
-        let step = n / k;
-        (0..k).map(|i| coords[(i * step) % n]).collect()
-    };
+    // k-means++ initialisation (deterministic under the seed).
+    let mut centroids: Vec<(f64, f64)> = Vec::with_capacity(k);
+    let first = rng.gen_range(0..n);
+    centroids.push(projected[first]);
+    while centroids.len() < k {
+        // D^2 weighting: sample next centroid with probability ~ squared distance.
+        let mut total = 0.0f64;
+        let mut d2: Vec<f64> = projected
+            .iter()
+            .map(|p| {
+                let d = centroids
+                    .iter()
+                    .map(|c| squared_dist(*p, *c))
+                    .fold(f64::INFINITY, f64::min);
+                total += d;
+                d
+            })
+            .collect();
+        if total <= 1e-12 {
+            // All remaining points coincide with centroids; pick deterministically.
+            let idx = centroids.len() % n;
+            centroids.push(projected[idx]);
+            continue;
+        }
+        let mut target = rng.gen_range(0.0..total);
+        let mut chosen = n - 1;
+        for (i, d) in d2.iter_mut().enumerate() {
+            target -= *d;
+            if target <= 0.0 {
+                chosen = i;
+                break;
+            }
+        }
+        centroids.push(projected[chosen]);
+        d2.clear();
+    }
 
     let mut assignments = vec![0usize; n];
-
     for _iter in 0..max_iter {
-        // Assignment step
         let mut changed = false;
-        for (i, &(lat, lon)) in coords.iter().enumerate() {
+        for (i, p) in projected.iter().enumerate() {
             let best = (0..k)
                 .min_by(|&a, &b| {
-                    let da = haversine_km(lat, lon, centroids[a].0, centroids[a].1);
-                    let db = haversine_km(lat, lon, centroids[b].0, centroids[b].1);
-                    da.partial_cmp(&db).unwrap()
+                    squared_dist(*p, centroids[a])
+                        .partial_cmp(&squared_dist(*p, centroids[b]))
+                        .unwrap()
                 })
                 .unwrap_or(0);
             if assignments[i] != best {
@@ -39,39 +112,45 @@ pub fn kmeans_cluster(coords: &[(f64, f64)], k: usize, max_iter: usize, _seed: u
         if !changed {
             break;
         }
-
-        // Update centroids
         for (c, centroid) in centroids.iter_mut().enumerate().take(k) {
-            let members: Vec<(f64, f64)> = coords
+            let members: Vec<(f64, f64)> = projected
                 .iter()
                 .enumerate()
                 .filter(|(i, _)| assignments[*i] == c)
                 .map(|(_, &p)| p)
                 .collect();
             if !members.is_empty() {
-                let mean_lat = members.iter().map(|p| p.0).sum::<f64>() / members.len() as f64;
-                let mean_lon = members.iter().map(|p| p.1).sum::<f64>() / members.len() as f64;
-                *centroid = (mean_lat, mean_lon);
+                let mx = members.iter().map(|p| p.0).sum::<f64>() / members.len() as f64;
+                let my = members.iter().map(|p| p.1).sum::<f64>() / members.len() as f64;
+                *centroid = (mx, my);
             }
         }
     }
     assignments
 }
 
-/// Determine optimal k via silhouette-like inertia elbow (simple inertia).
-pub fn choose_k(coords: &[(f64, f64)], max_k: usize) -> usize {
-    let n = coords.len();
+fn squared_dist(a: (f64, f64), b: (f64, f64)) -> f64 {
+    let dx = a.0 - b.0;
+    let dy = a.1 - b.1;
+    dx * dx + dy * dy
+}
+
+/// Determine optimal k via the inertia-elbow heuristic on projected Euclidean
+/// distances: stop at the first k where the marginal inertia improvement falls
+/// below 10% of the total improvement range (k from 2 to max_k, capped).
+pub fn choose_k_projected(projected: &[(f64, f64)], max_k: usize, seed: u64) -> usize {
+    let n = projected.len();
     if n <= 3 {
-        return 2_usize.min(n);
+        return 2_usize.min(n).max(1);
     }
     let max_k = max_k.min(n / 2).max(2);
 
     let mut inertias = vec![0.0f64; max_k + 1];
-    for (k, inertia_slot) in inertias.iter_mut().enumerate().take(max_k + 1).skip(2) {
-        let assignments = kmeans_cluster(coords, k, 100, 42);
-        let centroids: Vec<(f64, f64)> = (0..k)
+    for k in 2..=max_k {
+        let assignments = kmeans_cluster_projected(projected, k, 200, seed);
+        let mut centroids: Vec<(f64, f64)> = (0..k)
             .map(|c| {
-                let members: Vec<(f64, f64)> = coords
+                let members: Vec<(f64, f64)> = projected
                     .iter()
                     .enumerate()
                     .filter(|(i, _)| assignments[*i] == c)
@@ -80,28 +159,24 @@ pub fn choose_k(coords: &[(f64, f64)], max_k: usize) -> usize {
                 if members.is_empty() {
                     return (0.0, 0.0);
                 }
-                let ml = members.iter().map(|p| p.0).sum::<f64>() / members.len() as f64;
-                let mn = members.iter().map(|p| p.1).sum::<f64>() / members.len() as f64;
-                (ml, mn)
+                let mx = members.iter().map(|p| p.0).sum::<f64>() / members.len() as f64;
+                let my = members.iter().map(|p| p.1).sum::<f64>() / members.len() as f64;
+                (mx, my)
             })
             .collect();
-
-        let inertia: f64 = coords
+        let inertia: f64 = projected
             .iter()
             .enumerate()
-            .map(|(i, &(lat, lon))| {
-                let c = assignments[i];
-                haversine_km(lat, lon, centroids[c].0, centroids[c].1).powi(2)
-            })
+            .map(|(i, p)| squared_dist(*p, centroids[assignments[i]]))
             .sum();
-        *inertia_slot = inertia;
+        inertias[k] = inertia;
+        centroids.clear();
     }
 
-    // Simple elbow: choose k where improvement drops below 20% of total range
     let first = inertias[2];
     let last = inertias[max_k];
     if first <= last || (first - last).abs() < 1e-6 {
-        return 3;
+        return 3.min(max_k);
     }
     for k in 2..max_k {
         let improvement = (inertias[k] - inertias[k + 1]) / (first - last);
@@ -120,7 +195,6 @@ pub fn build_and_store_spatial_clusters(
     max_clusters: usize,
     forced_k: Option<usize>,
 ) -> Result<()> {
-    // Load coordinates
     struct SampleCoord {
         sample_id: String,
         lat: f64,
@@ -151,11 +225,18 @@ pub fn build_and_store_spatial_clusters(
     }
 
     let coords: Vec<(f64, f64)> = rows.iter().map(|r| (r.lat, r.lon)).collect();
-    let k = forced_k.unwrap_or_else(|| choose_k(&coords, max_clusters));
+    let (projected, _lat0, _lon0) = project_equirectangular(&coords);
+    let seed = 42u64;
+    let k = forced_k.unwrap_or_else(|| choose_k_projected(&projected, max_clusters, seed));
 
-    log::info!("Spatial clustering: k={} for {} wells", k, coords.len());
+    log::info!(
+        "Spatial clustering: k={} for {} wells (equirectangular projection, Euclidean k-means, seed {})",
+        k,
+        coords.len(),
+        seed
+    );
 
-    let assignments = kmeans_cluster(&coords, k, 200, 42);
+    let assignments = kmeans_cluster_projected(&projected, k, 200, seed);
 
     // Compute cluster metadata
     for c in 0..k {
@@ -171,7 +252,7 @@ pub fn build_and_store_spatial_clusters(
         let centroid_lat = members.iter().map(|p| p.0).sum::<f64>() / members.len() as f64;
         let centroid_lon = members.iter().map(|p| p.1).sum::<f64>() / members.len() as f64;
 
-        // Max intra-cluster distance
+        // Max intra-cluster distance (great-circle km, for reporting)
         let max_dist: f64 = members
             .iter()
             .flat_map(|&(a_lat, a_lon)| {
@@ -184,8 +265,8 @@ pub fn build_and_store_spatial_clusters(
         conn.execute(
             "INSERT OR REPLACE INTO spatial_cluster_metadata
              (spatial_cluster_id, centroid_latitude, centroid_longitude,
-              number_of_wells, max_intra_cluster_distance_km)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
+              number_of_wells, max_intra_cluster_distance_km, clustering_method, projection)
+             VALUES (?1, ?2, ?3, ?4, ?5, 'kmeans_projected_equirectangular', 'local_equirectangular_km')",
             rusqlite::params![
                 c as i64,
                 centroid_lat,

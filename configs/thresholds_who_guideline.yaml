@@ -1,0 +1,65 @@
+targets:
+  Na:
+    column: "Na"
+    unit: "mg/L"
+    threshold_value: 200.0
+    threshold_source: "Current WHO drinking-water guideline value (WHO 2022)"
+    exceedance_direction: "greater_than"
+    notes: "Sensitivity analysis: current WHO guideline value"
+
+  Cl:
+    column: "Cl"
+    unit: "mg/L"
+    threshold_value: 250.0
+    threshold_source: "Current WHO drinking-water guideline value (WHO 2022)"
+    exceedance_direction: "greater_than"
+    notes: "Sensitivity analysis: current WHO guideline value"
+
+  TDS:
+    column: "TDS"
+    unit: "mg/L"
+    threshold_value: 1000.0
+    threshold_source: "Current WHO drinking-water guideline value (WHO 2022)"
+    exceedance_direction: "greater_than"
+    notes: "Sensitivity analysis: current WHO guideline value"
+
+  B:
+    column: "B"
+    unit: "mg/L"
+    threshold_value: 2.4
+    threshold_source: "Current WHO drinking-water guideline value (WHO 2022)"
+    exceedance_direction: "greater_than"
+    notes: "Sensitivity analysis: current WHO guideline value for boron"
+
+  F:
+    column: "F"
+    unit: "mg/L"
+    threshold_value: 1.5
+    threshold_source: "Current WHO drinking-water guideline value (WHO 2022)"
+    exceedance_direction: "greater_than"
+    notes: "Sensitivity analysis: current WHO guideline value"
+
+  NO3:
+    column: "NO3"
+    unit: "mg/L"
+    threshold_value: 50.0
+    threshold_source: "Current WHO drinking-water guideline value (WHO 2022)"
+    exceedance_direction: "greater_than"
+    notes: "Sensitivity analysis: current WHO guideline value"
+
+bdl_substitution:
+  method: "limit_div_sqrt2"
+  use_min_detected_fallback: true
+  detection_limits:
+    CO3:
+      value: null
+      unit: "mg/L"
+      source: "not provided; fallback uses minimum detected value"
+    F:
+      value: null
+      unit: "mg/L"
+      source: "not provided; fallback uses minimum detected value"
+    NO3:
+      value: null
+      unit: "mg/L"
+      source: "not provided; fallback uses minimum detected value"
